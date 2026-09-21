@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { requireUser } from "@/lib/auth/require-user";
 import { todayRangeInZone } from "@/lib/time/zoned";
 import { getDailyActions } from "./daily-actions";
+import { ALL_LEAD_STATUSES } from "./pipeline";
 
 /**
  * Dashboard figures.
@@ -75,6 +76,16 @@ export async function getDashboard() {
 
   return {
     timezone: workspace.timezone,
+
+    /**
+     * Per-status counts for every status, so the pipeline snapshot and the
+     * conversion funnel can be rendered without extra queries. Statuses with
+     * no leads are present with a zero rather than omitted, which keeps the
+     * board shape stable on an empty workspace.
+     */
+    statusCounts: Object.fromEntries(
+      ALL_LEAD_STATUSES.map((status) => [status, countOf(status)]),
+    ) as Record<LeadStatus, number>,
 
     metrics: {
       totalLeads,

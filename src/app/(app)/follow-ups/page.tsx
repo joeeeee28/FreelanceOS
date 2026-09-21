@@ -7,7 +7,22 @@ import type {
 
 import { listFollowUps } from "@/lib/crm/follow-ups";
 import { getWorkspaceTimeFormatters } from "@/lib/time/workspace-time";
+import { relativeLabel } from "@/lib/time/relative";
+import { isOverdue, isTodayInZone, zonedInputValue } from "@/lib/time/zoned";
 import { InlineAction } from "@/components/crm/lead-detail-panels";
+import { RescheduleControl } from "@/components/crm/reschedule-control";
+import {
+  Badge,
+  Card,
+  CardHeader,
+  EmptyState,
+  LinkButton,
+  cn,
+} from "@/components/ui/primitives";
+import { Icon, humanise } from "@/components/ui/domain";
+import { PageHeader } from "@/components/ui/page";
+import { FilterBar, FilterSelect } from "@/components/crm/filter-bar";
+import { Pagination } from "@/components/crm/pagination";
 
 const STATUSES: FollowUpStatus[] = ["SCHEDULED", "COMPLETED", "CANCELLED"];
 
@@ -28,16 +43,12 @@ const CHANNELS: FollowUpChannel[] = [
 
 const SEQUENCES: FollowUpSequence[] = ["INITIAL", "FU1", "FU2", "FU3", "NURTURE"];
 
-function humanise(value: string) {
-  const lower = value.replaceAll("_", " ").toLowerCase();
-  return lower.charAt(0).toUpperCase() + lower.slice(1);
-}
-
 export default async function FollowUpsPage({
   searchParams,
 }: {
   searchParams: Promise<Record<string, string | undefined>>;
 }) {
+  const now = new Date();
   const params = await searchParams;
 
   const result = await listFollowUps({
@@ -58,9 +69,13 @@ export default async function FollowUpsPage({
     page: Number(params.page) || 1,
   });
 
-  const { formatDateTime } = await getWorkspaceTimeFormatters();
+  const { formatDateTime, timeZone } = await getWorkspaceTimeFormatters();
 
-  const query = (overrides: Record<string, string | number | undefined>) => {
+  const hasFilters = Boolean(
+    params.status || params.channel || params.sequence || params.due,
+  );
+
+  const linkTo = (overrides: Record<string, string | number | undefined>) => {
     const next = new URLSearchParams();
     for (const [key, value] of Object.entries({ ...params, ...overrides })) {
       if (value !== undefined && value !== "") next.set(key, String(value));
@@ -69,156 +84,296 @@ export default async function FollowUpsPage({
     return qs ? `/follow-ups?${qs}` : "/follow-ups";
   };
 
+  type Row = (typeof result.items)[number];
+
+  /**
+   * Groups the current page into Overdue / Due today / Upcoming / Completed.
+   *
+   * Grouping is presentation only — the rows are exactly what the server
+   * returned for the active filters and page.
+   */
+  const groups: Array<{
+    id: string;
+    title: string;
+    description: string;
+    tone: "danger" | "warning" | "neutral";
+    rows: Row[];
+  }> = [
+    {
+      id: "overdue",
+      title: "Overdue",
+      description: "Past their scheduled time and still not sent.",
+      tone: "danger",
+      rows: [],
+    },
+    {
+      id: "today",
+      title: "Due today",
+      description: "Scheduled for today in your workspace timezone.",
+      tone: "warning",
+      rows: [],
+    },
+    {
+      id: "upcoming",
+      title: "Upcoming",
+      description: "Planned for a future date.",
+      tone: "neutral",
+      rows: [],
+    },
+    {
+      id: "closed",
+      title: "Completed and cancelled",
+      description: "A record of outreach already dealt with.",
+      tone: "neutral",
+      rows: [],
+    },
+  ];
+
+  const byId = Object.fromEntries(groups.map((group) => [group.id, group]));
+
+  for (const row of result.items) {
+    if (row.status !== "SCHEDULED") {
+      byId.closed.rows.push(row);
+    } else if (isOverdue(row.scheduledAt, now)) {
+      byId.overdue.rows.push(row);
+    } else if (isTodayInZone(row.scheduledAt, timeZone, now)) {
+      byId.today.rows.push(row);
+    } else {
+      byId.upcoming.rows.push(row);
+    }
+  }
+
+  const visibleGroups = groups.filter((group) => group.rows.length > 0);
+
   return (
-    <div className="space-y-6">
-      <header>
-        <h1 className="text-2xl font-semibold">Follow-ups</h1>
-        <p className="text-muted-foreground">
-          {result.total === 0
-            ? "Nothing scheduled."
-            : `${result.total} follow-up${result.total === 1 ? "" : "s"}`}
-        </p>
-      </header>
+    <div className="space-y-5">
+      <PageHeader
+        title="Follow-ups"
+        description={
+          result.total === 0
+            ? "Planned outreach, grouped by when it is due."
+            : `${result.total} follow-up${result.total === 1 ? "" : "s"}${
+                hasFilters ? " matching your filters" : ""
+              }, grouped by when they are due.`
+        }
+        actions={
+          <LinkButton href="/leads" variant="secondary">
+            <Icon name="leads" size={14} />
+            Schedule from a lead
+          </LinkButton>
+        }
+      />
 
-      <form method="GET" className="grid gap-3 rounded-xl border p-4 sm:grid-cols-5">
-        <label className="space-y-1">
-          <span className="text-xs font-medium">Status</span>
-          <select
-            name="status"
-            defaultValue={params.status ?? ""}
-            className="w-full rounded-md border bg-background px-3 py-2 text-sm"
-          >
-            <option value="">All</option>
-            {STATUSES.map((value) => (
-              <option key={value} value={value}>
-                {humanise(value)}
-              </option>
-            ))}
-          </select>
-        </label>
+      <FilterBar active={hasFilters} clearHref="/follow-ups">
+        <FilterSelect
+          label="Status"
+          name="status"
+          defaultValue={params.status}
+          placeholder="Any status"
+          options={STATUSES.map((value) => ({ value, label: humanise(value) }))}
+        />
 
-        <label className="space-y-1">
-          <span className="text-xs font-medium">Channel</span>
-          <select
-            name="channel"
-            defaultValue={params.channel ?? ""}
-            className="w-full rounded-md border bg-background px-3 py-2 text-sm"
-          >
-            <option value="">All</option>
-            {CHANNELS.map((value) => (
-              <option key={value} value={value}>
-                {humanise(value)}
-              </option>
-            ))}
-          </select>
-        </label>
+        <FilterSelect
+          label="Due"
+          name="due"
+          defaultValue={params.due}
+          placeholder="Any time"
+          options={[
+            { value: "overdue", label: "Overdue" },
+            { value: "today", label: "Today" },
+            { value: "upcoming", label: "Upcoming" },
+          ]}
+        />
 
-        <label className="space-y-1">
-          <span className="text-xs font-medium">Sequence</span>
-          <select
-            name="sequence"
-            defaultValue={params.sequence ?? ""}
-            className="w-full rounded-md border bg-background px-3 py-2 text-sm"
-          >
-            <option value="">All</option>
-            {SEQUENCES.map((value) => (
-              <option key={value} value={value}>
-                {value}
-              </option>
-            ))}
-          </select>
-        </label>
+        <FilterSelect
+          label="Channel"
+          name="channel"
+          defaultValue={params.channel}
+          placeholder="Any channel"
+          options={CHANNELS.map((value) => ({ value, label: humanise(value) }))}
+        />
 
-        <label className="space-y-1">
-          <span className="text-xs font-medium">Due</span>
-          <select
-            name="due"
-            defaultValue={params.due ?? ""}
-            className="w-full rounded-md border bg-background px-3 py-2 text-sm"
-          >
-            <option value="">Any time</option>
-            <option value="overdue">Overdue</option>
-            <option value="today">Today</option>
-            <option value="upcoming">Upcoming</option>
-          </select>
-        </label>
-
-        <div className="flex items-end gap-2">
-          <button className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground">
-            Filter
-          </button>
-          <Link href="/follow-ups" className="rounded-md border px-4 py-2 text-sm hover:bg-muted">
-            Clear
-          </Link>
-        </div>
-      </form>
+        <FilterSelect
+          label="Sequence"
+          name="sequence"
+          defaultValue={params.sequence}
+          placeholder="Any step"
+          options={SEQUENCES.map((value) => ({ value, label: value }))}
+        />
+      </FilterBar>
 
       {result.items.length === 0 ? (
-        <div className="rounded-xl border p-8 text-center">
-          <p className="font-medium">No follow-ups found.</p>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Schedule follow-ups from a lead&apos;s page to keep conversations moving.
-          </p>
-        </div>
+        <EmptyState
+          icon={<Icon name="followups" />}
+          title={
+            hasFilters ? "No follow-ups match these filters" : "No follow-ups yet"
+          }
+          description={
+            hasFilters
+              ? "Try a different channel, sequence step or due window."
+              : "Follow-ups are scheduled from a lead's page. Once scheduled, anything due or overdue is promoted into your daily revenue actions."
+          }
+          action={
+            hasFilters ? (
+              <LinkButton href="/follow-ups" variant="secondary" size="sm">
+                Clear filters
+              </LinkButton>
+            ) : (
+              <LinkButton href="/leads" variant="primary" size="sm">
+                Go to leads
+              </LinkButton>
+            )
+          }
+        />
       ) : (
-        <div className="space-y-3">
-          {result.items.map((item) => (
-            <div
-              key={item.id}
-              className="flex flex-wrap items-start justify-between gap-3 rounded-xl border p-4"
-            >
-              <div>
-                <Link href={`/leads/${item.lead.id}`} className="font-medium hover:underline">
-                  {item.lead.companyName}
-                </Link>
-                <p className="text-sm text-muted-foreground">
-                  {item.sequence} · {humanise(item.channel)} · {humanise(item.status)}
-                  {item.contact ? ` · ${item.contact.fullName}` : ""}
-                </p>
-                <p className="mt-1 text-sm">{formatDateTime(item.scheduledAt)}</p>
-              </div>
+        <div className="space-y-5">
+          {visibleGroups.map((group) => (
+            <Card key={group.id}>
+              <CardHeader
+                title={
+                  <span className="flex items-center gap-2">
+                    {group.title}
+                    <Badge
+                      tone={
+                        group.tone === "danger"
+                          ? "danger"
+                          : group.tone === "warning"
+                            ? "warning"
+                            : "neutral"
+                      }
+                    >
+                      {group.rows.length}
+                    </Badge>
+                  </span>
+                }
+                description={group.description}
+              />
 
-              {item.status === "SCHEDULED" ? (
-                <div className="flex gap-2">
-                  <InlineAction id={item.id} kind="completeFollowUp" label="Complete" />
-                  <InlineAction
-                    id={item.id}
-                    kind="cancelFollowUp"
-                    label="Cancel"
-                    variant="danger"
-                  />
-                </div>
-              ) : null}
-            </div>
+              <div className="divide-y divide-border">
+                {group.rows.map((followUp) => {
+                  const overdue =
+                    followUp.status === "SCHEDULED" &&
+                    isOverdue(followUp.scheduledAt, now);
+
+                  return (
+                    <div
+                      key={followUp.id}
+                      className="flex flex-wrap items-start justify-between gap-3 p-4"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {followUp.lead ? (
+                            <Link
+                              href={`/leads/${followUp.lead.id}?tab=follow-ups`}
+                              className="text-sm font-medium text-foreground hover:text-accent"
+                            >
+                              {followUp.lead.companyName}
+                            </Link>
+                          ) : (
+                            <span className="text-sm font-medium">
+                              Unlinked follow-up
+                            </span>
+                          )}
+
+                          <Badge tone="neutral">{humanise(followUp.channel)}</Badge>
+                          <Badge tone="neutral">{followUp.sequence}</Badge>
+                          <Badge
+                            tone={
+                              followUp.status === "COMPLETED"
+                                ? "success"
+                                : followUp.status === "CANCELLED"
+                                  ? "neutral"
+                                  : "info"
+                            }
+                          >
+                            {humanise(followUp.status)}
+                          </Badge>
+                        </div>
+
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          {followUp.contact ? (
+                            <>
+                              {followUp.contact.fullName}
+                              <span aria-hidden> · </span>
+                            </>
+                          ) : (
+                            <>
+                              <span className="text-subtle-foreground">
+                                No specific contact
+                              </span>
+                              <span aria-hidden> · </span>
+                            </>
+                          )}
+                          <span
+                            className={cn(
+                              overdue && "font-medium text-danger",
+                            )}
+                          >
+                            {overdue ? "Overdue " : ""}
+                            {relativeLabel(followUp.scheduledAt, now)}
+                          </span>
+                          <span className="text-subtle-foreground">
+                            {" "}
+                            · {formatDateTime(followUp.scheduledAt)}
+                          </span>
+                        </p>
+
+                        {followUp.message ? (
+                          <p className="mt-2 whitespace-pre-line rounded-md border border-border bg-surface-muted px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+                            {followUp.message}
+                          </p>
+                        ) : (
+                          <p className="mt-1.5 text-xs text-subtle-foreground">
+                            No message drafted
+                          </p>
+                        )}
+
+                        {followUp.completedAt ? (
+                          <p className="mt-1.5 text-2xs text-subtle-foreground">
+                            Completed {formatDateTime(followUp.completedAt)}
+                          </p>
+                        ) : null}
+                      </div>
+
+                      {followUp.status === "SCHEDULED" ? (
+                        <div className="flex flex-wrap items-start gap-2">
+                          <InlineAction
+                            id={followUp.id}
+                            kind="completeFollowUp"
+                            label="Complete"
+                          />
+                          <RescheduleControl
+                            followUpId={followUp.id}
+                            defaultValue={zonedInputValue(
+                              followUp.scheduledAt,
+                              timeZone,
+                            )}
+                          />
+                          <InlineAction
+                            id={followUp.id}
+                            kind="cancelFollowUp"
+                            label="Cancel"
+                            variant="danger"
+                          />
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            </Card>
           ))}
+
+          <Pagination
+            page={result.page}
+            pageSize={result.pageSize}
+            total={result.total}
+            totalPages={result.totalPages}
+            linkTo={linkTo}
+            noun="follow-up"
+          />
         </div>
       )}
-
-      {result.totalPages > 1 ? (
-        <nav className="flex items-center justify-between gap-3">
-          <p className="text-sm text-muted-foreground">
-            Page {result.page} of {result.totalPages}
-          </p>
-          <div className="flex gap-2">
-            {result.page > 1 ? (
-              <Link
-                href={query({ page: result.page - 1 })}
-                className="rounded-md border px-3 py-1.5 text-sm hover:bg-muted"
-              >
-                Previous
-              </Link>
-            ) : null}
-            {result.page < result.totalPages ? (
-              <Link
-                href={query({ page: result.page + 1 })}
-                className="rounded-md border px-3 py-1.5 text-sm hover:bg-muted"
-              >
-                Next
-              </Link>
-            ) : null}
-          </div>
-        </nav>
-      ) : null}
     </div>
   );
 }

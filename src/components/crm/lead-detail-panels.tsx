@@ -20,6 +20,7 @@ import {
   updateQualificationAction,
 } from "@/app/(app)/leads/actions";
 import { IDLE, type ActionResult } from "@/lib/crm/action-result";
+import { formatDateTimeInZone } from "@/lib/time/zoned";
 import {
   Checkbox,
   Field,
@@ -30,28 +31,36 @@ import {
   TextInput,
   fieldErrors,
 } from "./form-controls";
-
-function humanise(value: string) {
-  const lower = value.replaceAll("_", " ").toLowerCase();
-  return lower.charAt(0).toUpperCase() + lower.slice(1);
-}
+import { Avatar, Icon, PriorityBadge, humanise } from "@/components/ui/domain";
+import {
+  Badge as UiBadge,
+  buttonClass,
+  cn,
+} from "@/components/ui/primitives";
 
 function Panel({
   title,
+  description,
   action,
   children,
 }: {
   title: string;
+  description?: string;
   action?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
-    <section className="rounded-xl border p-4 sm:p-6">
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-lg font-semibold">{title}</h2>
-        {action}
+    <section className="rounded-xl border border-border bg-surface shadow-xs">
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border px-4 py-3.5 sm:px-5">
+        <div className="min-w-0">
+          <h2 className="text-sm font-semibold tracking-tight">{title}</h2>
+          {description ? (
+            <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
+          ) : null}
+        </div>
+        {action ? <div className="shrink-0">{action}</div> : null}
       </div>
-      {children}
+      <div className="p-4 sm:p-5">{children}</div>
     </section>
   );
 }
@@ -74,11 +83,25 @@ function Disclosure({
         type="button"
         onClick={() => setIsOpen((value) => !value)}
         aria-expanded={isOpen}
-        className="rounded-md border px-3 py-1.5 text-sm hover:bg-muted"
+        className={buttonClass(isOpen ? "ghost" : "secondary", "sm")}
       >
-        {isOpen ? "Cancel" : label}
+        {isOpen ? (
+          <>
+            <Icon name="close" size={13} />
+            Cancel
+          </>
+        ) : (
+          <>
+            <Icon name="plus" size={13} />
+            {label}
+          </>
+        )}
       </button>
-      {isOpen ? <div className="mt-4">{children}</div> : null}
+      {isOpen ? (
+        <div className="mt-4 animate-fade-in rounded-lg border border-border bg-surface-muted p-4">
+          {children}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -89,39 +112,79 @@ export function StatusControl({
   leadId,
   current,
   allowed,
+  compact,
 }: {
   leadId: string;
   current: LeadStatus;
   allowed: LeadStatus[];
+  /** Tighter layout for pipeline board cards. */
+  compact?: boolean;
 }) {
   const [state, formAction] = useActionState(
     moveLeadAction.bind(null, leadId),
     IDLE as ActionResult,
   );
 
+  // WON has no onward transitions; say so rather than showing a dead control.
   if (allowed.length === 0) {
     return (
-      <p className="text-sm text-muted-foreground">
+      <p
+        className={cn(
+          "text-muted-foreground",
+          compact ? "text-2xs" : "text-sm",
+        )}
+      >
         {humanise(current)} is a final stage.
       </p>
     );
   }
 
+  const selectId = `move-${leadId}`;
+
   return (
-    <form action={formAction} className="flex flex-wrap items-end gap-2">
-      <div className="min-w-[12rem] flex-1">
-        <Field label="Move to" name="status">
-          <Select
+    <form
+      action={formAction}
+      className={compact ? "space-y-2" : "flex flex-wrap items-end gap-2"}
+    >
+      {compact ? (
+        <>
+          <label htmlFor={selectId} className="sr-only">
+            Move {humanise(current)} lead to another stage
+          </label>
+          <select
+            id={selectId}
             name="status"
             defaultValue={allowed[0]}
-            options={allowed.map((status) => ({
-              value: status,
-              label: humanise(status),
-            }))}
-          />
-        </Field>
-      </div>
-      <SubmitButton>Update status</SubmitButton>
+            className="h-8 w-full rounded-md border border-border bg-surface px-2 text-xs text-foreground hover:border-border-strong"
+          >
+            {allowed.map((status) => (
+              <option key={status} value={status}>
+                Move to {humanise(status)}
+              </option>
+            ))}
+          </select>
+          <SubmitButton size="sm" variant="secondary">
+            Update stage
+          </SubmitButton>
+        </>
+      ) : (
+        <>
+          <div className="min-w-[12rem] flex-1">
+            <Field label="Move to" name="status">
+              <Select
+                name="status"
+                defaultValue={allowed[0]}
+                options={allowed.map((status) => ({
+                  value: status,
+                  label: humanise(status),
+                }))}
+              />
+            </Field>
+          </div>
+          <SubmitButton>Update status</SubmitButton>
+        </>
+      )}
+
       <div className="w-full">
         <FormStatus state={state} />
       </div>
@@ -233,26 +296,59 @@ export function QualificationPanel({
   );
 
   return (
-    <Panel title="Qualification">
-      <div className="mb-5 rounded-lg bg-muted/50 p-4">
-        <div className="flex items-baseline justify-between">
-          <span className="text-sm font-medium">Lead score</span>
-          <span className="text-2xl font-semibold">{score}/100</span>
+    <Panel
+      title="Qualification"
+      description="The score is recalculated on the server from these answers."
+    >
+      <div className="mb-5 rounded-lg border border-border bg-surface-muted p-4">
+        <div className="flex items-baseline justify-between gap-3">
+          <span className="text-xs font-medium uppercase tracking-wide text-subtle-foreground">
+            Lead score
+          </span>
+          <span className="tabular text-2xl font-semibold">
+            {score}
+            <span className="text-sm font-normal text-subtle-foreground">/100</span>
+          </span>
+        </div>
+
+        {/* Visual weight of the score, matching the band thresholds. */}
+        <div
+          aria-hidden
+          className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted"
+        >
+          <div
+            className={cn(
+              "h-full rounded-full",
+              score >= 50 ? "bg-success" : score >= 25 ? "bg-warning" : "bg-border-strong",
+            )}
+            style={{ width: `${Math.max(score, 2)}%` }}
+          />
         </div>
 
         {scoreReasons.length === 0 ? (
-          <p className="mt-2 text-sm text-muted-foreground">
-            No scoring signals yet. Complete the qualification below to build a score.
+          <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
+            No scoring signals yet. Complete the qualification below and each
+            answer that indicates opportunity will add points here.
           </p>
         ) : (
-          <ul className="mt-3 space-y-1">
-            {scoreReasons.map((reason) => (
-              <li key={reason.label} className="flex justify-between text-sm">
-                <span className="text-muted-foreground">{reason.label}</span>
-                <span className="font-medium">+{reason.points}</span>
-              </li>
-            ))}
-          </ul>
+          <>
+            <p className="mt-3.5 text-2xs font-medium uppercase tracking-wide text-subtle-foreground">
+              Why this score
+            </p>
+            <ul className="mt-1.5 space-y-1">
+              {scoreReasons.map((reason) => (
+                <li
+                  key={reason.label}
+                  className="flex items-baseline justify-between gap-3 text-sm"
+                >
+                  <span className="text-muted-foreground">{reason.label}</span>
+                  <span className="tabular shrink-0 font-medium text-success">
+                    +{reason.points}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </>
         )}
       </div>
 
@@ -262,6 +358,7 @@ export function QualificationPanel({
         <Checkbox
           name="decisionMakerIdentified"
           label="Decision maker identified"
+          hint="You know who can approve and sign off the work."
           defaultChecked={lead.decisionMakerIdentified}
         />
 
@@ -352,28 +449,91 @@ export function ContactsPanel({
   );
 
   return (
-    <Panel title={`Contacts (${contacts.length})`}>
+    <Panel
+      title={`Contacts (${contacts.length})`}
+      description="People at this company you can actually reach."
+    >
       {contacts.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          No contacts yet. Add the person who can approve the work.
-        </p>
+        <div className="mb-5 rounded-lg border border-dashed border-border bg-surface-muted px-4 py-8 text-center">
+          <p className="text-sm font-semibold">No contacts yet</p>
+          <p className="mx-auto mt-1 max-w-sm text-sm leading-relaxed text-muted-foreground">
+            Add the person who can approve the work. Identifying a decision
+            maker is the single largest scoring signal.
+          </p>
+        </div>
       ) : (
-        <ul className="mb-5 space-y-3">
+        <ul className="mb-5 grid gap-2.5 sm:grid-cols-2">
           {contacts.map((contact) => (
-            <li key={contact.id} className="rounded-lg border p-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-medium">{contact.fullName}</span>
-                {contact.isPrimary ? <Badge>Primary</Badge> : null}
-                {contact.isDecisionMaker ? <Badge>Decision maker</Badge> : null}
+            <li
+              key={contact.id}
+              className="flex flex-col rounded-lg border border-border bg-surface p-3.5"
+            >
+              <div className="flex items-start gap-2.5">
+                <Avatar name={contact.fullName} />
+
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium">
+                    {contact.fullName}
+                  </p>
+                  <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                    {contact.jobTitle ?? (
+                      <span className="text-subtle-foreground">
+                        Role unknown
+                      </span>
+                    )}
+                  </p>
+                </div>
               </div>
 
-              <p className="mt-1 text-sm text-muted-foreground">
-                {[contact.jobTitle, contact.email, contact.phone]
-                  .filter(Boolean)
-                  .join(" · ") || "No contact details"}
-              </p>
+              {contact.isPrimary || contact.isDecisionMaker ? (
+                <div className="mt-2.5 flex flex-wrap gap-1.5">
+                  {contact.isPrimary ? (
+                    <UiBadge tone="accent" uppercase>
+                      Primary
+                    </UiBadge>
+                  ) : null}
+                  {contact.isDecisionMaker ? (
+                    <UiBadge tone="success" uppercase>
+                      Decision maker
+                    </UiBadge>
+                  ) : null}
+                </div>
+              ) : null}
 
-              <div className="mt-3">
+              <dl className="mt-2.5 space-y-1 text-xs">
+                <div className="flex gap-1.5">
+                  <dt className="shrink-0 text-subtle-foreground">Email</dt>
+                  <dd className="min-w-0 truncate">
+                    {contact.email ? (
+                      <a
+                        href={`mailto:${contact.email}`}
+                        className="text-accent hover:underline"
+                      >
+                        {contact.email}
+                      </a>
+                    ) : (
+                      <span className="text-subtle-foreground">Unknown</span>
+                    )}
+                  </dd>
+                </div>
+                <div className="flex gap-1.5">
+                  <dt className="shrink-0 text-subtle-foreground">Phone</dt>
+                  <dd className="min-w-0 truncate">
+                    {contact.phone ? (
+                      <a
+                        href={`tel:${contact.phone}`}
+                        className="text-accent hover:underline"
+                      >
+                        {contact.phone}
+                      </a>
+                    ) : (
+                      <span className="text-subtle-foreground">Unknown</span>
+                    )}
+                  </dd>
+                </div>
+              </dl>
+
+              <div className="mt-3 border-t border-border pt-3">
                 <EditContactForm leadId={leadId} contact={contact} />
               </div>
             </li>
@@ -496,14 +656,6 @@ function ContactFields({
   );
 }
 
-function Badge({ children }: { children: React.ReactNode }) {
-  return (
-    <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
-      {children}
-    </span>
-  );
-}
-
 /* ------------------------------------------------------------- follow-ups */
 
 const CHANNELS = [
@@ -527,7 +679,7 @@ export function FollowUpsPanel({
   leadId,
   followUps,
   contacts,
-  formatDateTime,
+  timeZone,
   defaultScheduledAt,
 }: {
   leadId: string;
@@ -540,7 +692,11 @@ export function FollowUpsPanel({
     message: string | null;
   }>;
   contacts: Array<{ id: string; fullName: string }>;
-  formatDateTime: (value: Date) => string;
+  /**
+   * The workspace timezone, not a formatter function: functions cannot cross
+   * the server/client boundary, and a string keeps this component serialisable.
+   */
+  timeZone: string;
   defaultScheduledAt: string;
 }) {
   const [state, formAction] = useActionState(
@@ -549,23 +705,53 @@ export function FollowUpsPanel({
   );
 
   return (
-    <Panel title={`Follow-ups (${followUps.length})`}>
+    <Panel
+      title={`Follow-ups (${followUps.length})`}
+      description="Planned outreach for this lead, in your workspace timezone."
+    >
       {followUps.length === 0 ? (
-        <p className="text-sm text-muted-foreground">Nothing scheduled yet.</p>
+        <div className="mb-5 rounded-lg border border-dashed border-border bg-surface-muted px-4 py-8 text-center">
+          <p className="text-sm font-semibold">Nothing scheduled</p>
+          <p className="mx-auto mt-1 max-w-sm text-sm leading-relaxed text-muted-foreground">
+            Schedule a follow-up and it will appear in your daily revenue
+            actions when it falls due.
+          </p>
+        </div>
       ) : (
         <ul className="mb-5 space-y-2">
           {followUps.map((followUp) => (
             <li
               key={followUp.id}
-              className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3"
+              className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-surface p-3"
             >
-              <div>
-                <p className="text-sm font-medium">
-                  {humanise(followUp.sequence)} · {humanise(followUp.channel)}
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-sm font-medium">
+                    {humanise(followUp.channel)}
+                  </span>
+                  <UiBadge tone="neutral">{followUp.sequence}</UiBadge>
+                  <UiBadge
+                    tone={
+                      followUp.status === "COMPLETED"
+                        ? "success"
+                        : followUp.status === "CANCELLED"
+                          ? "neutral"
+                          : "info"
+                    }
+                  >
+                    {humanise(followUp.status)}
+                  </UiBadge>
+                </div>
+
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {formatDateTimeInZone(followUp.scheduledAt, timeZone)}
                 </p>
-                <p className="text-sm text-muted-foreground">
-                  {formatDateTime(followUp.scheduledAt)} · {humanise(followUp.status)}
-                </p>
+
+                {followUp.message ? (
+                  <p className="mt-1.5 whitespace-pre-line text-xs leading-relaxed text-muted-foreground">
+                    {followUp.message}
+                  </p>
+                ) : null}
               </div>
 
               {followUp.status === "SCHEDULED" ? (
@@ -658,7 +844,7 @@ export function TasksPanel({
   leadId,
   tasks,
   contacts,
-  formatDateTime,
+  timeZone,
 }: {
   leadId: string;
   tasks: Array<{
@@ -669,7 +855,8 @@ export function TasksPanel({
     dueAt: Date | null;
   }>;
   contacts: Array<{ id: string; fullName: string }>;
-  formatDateTime: (value: Date) => string;
+  /** Workspace timezone; see the note on FollowUpsPanel. */
+  timeZone: string;
 }) {
   const [state, formAction] = useActionState(
     createTaskAction.bind(null, leadId),
@@ -677,22 +864,56 @@ export function TasksPanel({
   );
 
   return (
-    <Panel title={`Tasks (${tasks.length})`}>
+    <Panel
+      title={`Tasks (${tasks.length})`}
+      description="Work you need to do to move this lead forward."
+    >
       {tasks.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No tasks for this lead.</p>
+        <div className="mb-5 rounded-lg border border-dashed border-border bg-surface-muted px-4 py-8 text-center">
+          <p className="text-sm font-semibold">No tasks for this lead</p>
+          <p className="mx-auto mt-1 max-w-sm text-sm leading-relaxed text-muted-foreground">
+            Add a task with a due date and an overdue one will surface in your
+            daily revenue actions.
+          </p>
+        </div>
       ) : (
         <ul className="mb-5 space-y-2">
-          {tasks.map((task) => (
+          {tasks.map((task) => {
+            const done = task.status === "DONE" || task.status === "CANCELLED";
+
+            return (
             <li
               key={task.id}
-              className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3"
+              className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-surface p-3"
             >
-              <div>
-                <p className="text-sm font-medium">{task.title}</p>
-                <p className="text-sm text-muted-foreground">
-                  {humanise(task.priority)} · {humanise(task.status)}
-                  {task.dueAt ? ` · due ${formatDateTime(task.dueAt)}` : ""}
+              <div className="min-w-0">
+                <p
+                  className={cn(
+                    "text-sm font-medium",
+                    done && "text-muted-foreground line-through",
+                  )}
+                >
+                  {task.title}
                 </p>
+                <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                  <PriorityBadge priority={task.priority} />
+                  <UiBadge
+                    tone={
+                      task.status === "DONE"
+                        ? "success"
+                        : task.status === "CANCELLED"
+                          ? "neutral"
+                          : "info"
+                    }
+                  >
+                    {humanise(task.status)}
+                  </UiBadge>
+                  {task.dueAt ? (
+                    <span className="text-2xs text-subtle-foreground">
+                      Due {formatDateTimeInZone(task.dueAt, timeZone)}
+                    </span>
+                  ) : null}
+                </div>
               </div>
 
               {task.status !== "DONE" && task.status !== "CANCELLED" ? (
@@ -707,7 +928,8 @@ export function TasksPanel({
                 </div>
               ) : null}
             </li>
-          ))}
+            );
+          })}
         </ul>
       )}
 
@@ -774,8 +996,18 @@ export function AddNotePanel({ leadId }: { leadId: string }) {
   return (
     <form action={formAction} className="space-y-3" noValidate>
       <FormStatus state={state} />
-      <Field label="Add a note" name="body" errors={fieldErrors(state, "body")}>
-        <TextArea name="body" rows={3} invalid={Boolean(fieldErrors(state, "body"))} />
+      <Field
+        label="Add a note"
+        name="body"
+        errors={fieldErrors(state, "body")}
+        hint="Notes are timestamped and appear in the activity timeline."
+      >
+        <TextArea
+          name="body"
+          rows={3}
+          placeholder="What did you learn about this lead?"
+          invalid={Boolean(fieldErrors(state, "body"))}
+        />
       </Field>
       <SubmitButton variant="secondary">Add note</SubmitButton>
     </form>
@@ -837,7 +1069,7 @@ export function InlineAction({
     <form action={formAction}>
       <SubmitButton variant={variant}>{label}</SubmitButton>
       {state.status === "error" ? (
-        <span role="alert" className="ml-2 text-xs text-destructive">
+        <span role="alert" className="ml-2 text-xs text-danger">
           {state.message}
         </span>
       ) : null}

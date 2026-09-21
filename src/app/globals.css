@@ -3,20 +3,26 @@
 @tailwind utilities;
 
 /*
- * Design tokens consumed by the existing FreelanceOS UI.
+ * FreelanceOS design tokens.
  *
- * The application currently references these Tailwind token classes:
- *   bg-background, text-foreground, bg-primary, text-primary-foreground,
- *   bg-muted, bg-muted/40, bg-muted/50, text-muted-foreground,
- *   text-destructive, and the default `border` colour.
+ * Premium SaaS aesthetic: deep navy/charcoal text on near-white surfaces,
+ * subtle neutral borders, restrained accent colours. Values are HSL channel
+ * triplets so Tailwind opacity modifiers (bg-muted/50) keep working.
  *
- * Values are HSL channel triplets so Tailwind can apply opacity modifiers
- * (e.g. bg-muted/50).
+ * Semantic groups:
+ *   surface   — page, card, raised panel backgrounds
+ *   content   — text hierarchy (foreground / muted / subtle)
+ *   line      — borders and dividers
+ *   accent    — the single brand colour, used sparingly
+ *   status    — success / warning / danger / info, for data meaning only
  */
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222 47% 11%;
+    /* Surfaces: a faintly cool page behind pure-white cards gives depth
+       without shadows doing the work. */
+    --background: 220 20% 97%;
+    --surface: 0 0% 100%;
+    --surface-muted: 220 20% 98%;
 
     --card: 0 0% 100%;
     --card-foreground: 222 47% 11%;
@@ -24,56 +30,88 @@
     --popover: 0 0% 100%;
     --popover-foreground: 222 47% 11%;
 
-    --primary: 222 47% 11%;
-    --primary-foreground: 210 40% 98%;
+    /* Content hierarchy */
+    --foreground: 222 47% 11%;
+    --muted: 220 16% 96%;
+    --muted-foreground: 215 14% 46%;
+    --subtle-foreground: 215 12% 58%;
 
-    --secondary: 210 40% 96%;
-    --secondary-foreground: 222 47% 11%;
-
-    --muted: 210 40% 96%;
-    --muted-foreground: 215 16% 47%;
-
-    --accent: 210 40% 96%;
-    --accent-foreground: 222 47% 11%;
-
-    --destructive: 0 72% 51%;
-    --destructive-foreground: 210 40% 98%;
-
-    --border: 214 32% 91%;
-    --input: 214 32% 91%;
+    /* Lines */
+    --border: 220 16% 90%;
+    --border-strong: 220 14% 84%;
+    --input: 220 16% 88%;
     --ring: 222 47% 11%;
 
+    /* Primary action: deep navy, not blue-bright. */
+    --primary: 222 47% 13%;
+    --primary-foreground: 210 40% 98%;
+
+    --secondary: 220 16% 96%;
+    --secondary-foreground: 222 47% 11%;
+
+    --accent: 221 70% 48%;
+    --accent-foreground: 0 0% 100%;
+    --accent-subtle: 221 80% 96%;
+
+    /* Status colours convey data meaning only, never decoration. */
+    --success: 152 58% 32%;
+    --success-subtle: 152 50% 95%;
+    --warning: 32 80% 40%;
+    --warning-subtle: 38 90% 95%;
+    --danger: 0 65% 45%;
+    --danger-subtle: 0 80% 96%;
+    --info: 215 70% 45%;
+    --info-subtle: 215 90% 96%;
+
+    --destructive: 0 65% 45%;
+    --destructive-foreground: 0 0% 100%;
+
+    /* Medium radius — professional, not bubbly. */
     --radius: 0.5rem;
   }
 
   .dark {
-    --background: 222 47% 11%;
-    --foreground: 210 40% 98%;
+    --background: 224 30% 7%;
+    --surface: 222 26% 10%;
+    --surface-muted: 222 24% 13%;
 
-    --card: 222 47% 11%;
-    --card-foreground: 210 40% 98%;
+    --card: 222 26% 10%;
+    --card-foreground: 210 30% 96%;
 
-    --popover: 222 47% 11%;
-    --popover-foreground: 210 40% 98%;
+    --popover: 222 26% 11%;
+    --popover-foreground: 210 30% 96%;
 
-    --primary: 210 40% 98%;
+    --foreground: 210 30% 96%;
+    --muted: 220 20% 16%;
+    --muted-foreground: 215 16% 65%;
+    --subtle-foreground: 215 14% 55%;
+
+    --border: 220 18% 20%;
+    --border-strong: 220 16% 28%;
+    --input: 220 18% 22%;
+    --ring: 213 27% 74%;
+
+    --primary: 210 30% 96%;
     --primary-foreground: 222 47% 11%;
 
-    --secondary: 217 33% 18%;
-    --secondary-foreground: 210 40% 98%;
+    --secondary: 220 20% 16%;
+    --secondary-foreground: 210 30% 96%;
 
-    --muted: 217 33% 18%;
-    --muted-foreground: 215 20% 65%;
+    --accent: 217 80% 62%;
+    --accent-foreground: 222 47% 11%;
+    --accent-subtle: 221 45% 18%;
 
-    --accent: 217 33% 18%;
-    --accent-foreground: 210 40% 98%;
+    --success: 152 45% 58%;
+    --success-subtle: 152 30% 16%;
+    --warning: 38 75% 62%;
+    --warning-subtle: 36 40% 16%;
+    --danger: 0 70% 66%;
+    --danger-subtle: 0 35% 18%;
+    --info: 215 75% 66%;
+    --info-subtle: 215 40% 18%;
 
-    --destructive: 0 63% 51%;
-    --destructive-foreground: 210 40% 98%;
-
-    --border: 217 33% 18%;
-    --input: 217 33% 18%;
-    --ring: 213 27% 84%;
+    --destructive: 0 70% 60%;
+    --destructive-foreground: 0 0% 100%;
   }
 
   * {
@@ -82,5 +120,31 @@
 
   body {
     @apply bg-background text-foreground;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Tabular figures keep numeric columns (scores, counts) optically aligned. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* A single consistent focus treatment across every interactive element. */
+  :where(a, button, input, select, textarea, [tabindex]):focus-visible {
+    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
+  }
+}
+
+@layer utilities {
+  /* Hides scrollbars on horizontally scrolling boards while keeping them
+     keyboard and wheel scrollable. */
+  .no-scrollbar {
+    scrollbar-width: thin;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    height: 8px;
+  }
+  .no-scrollbar::-webkit-scrollbar-thumb {
+    @apply rounded-full bg-border;
   }
 }

@@ -61,6 +61,31 @@ export function zonedParts(
 }
 
 /**
+ * Formats an instant as the `YYYY-MM-DDTHH:mm` string a `datetime-local`
+ * input expects, expressed in `timeZone`.
+ *
+ * Needed because `datetime-local` has no timezone: rendering the workspace's
+ * wall-clock time is what makes a round trip through the form preserve the
+ * user's intent.
+ */
+export function zonedInputValue(instant: Date, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(instant);
+
+  const get = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? "00";
+
+  return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}`;
+}
+
+/**
  * The UTC instant corresponding to a wall-clock time in `timeZone`.
  *
  * The offset is resolved iteratively because the correct offset depends on the

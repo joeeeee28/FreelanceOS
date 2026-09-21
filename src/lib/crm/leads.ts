@@ -43,15 +43,39 @@ export function normalisePaging(page?: number, pageSize?: number) {
   return { page: safePage, pageSize: safeSize, skip: (safePage - 1) * safeSize };
 }
 
+/**
+ * Sort orders offered by the leads table.
+ *
+ * A fixed allow-list rather than a free-form `orderBy`: the URL can only ask
+ * for one of these, so no caller can order by an arbitrary column.
+ */
+export const LEAD_SORTS = {
+  score: [{ score: "desc" }, { updatedAt: "desc" }],
+  recent: [{ updatedAt: "desc" }],
+  oldest: [{ createdAt: "asc" }],
+  company: [{ companyName: "asc" }],
+} satisfies Record<string, Prisma.LeadOrderByWithRelationInput[]>;
+
+export type LeadSort = keyof typeof LEAD_SORTS;
+
+export const DEFAULT_LEAD_SORT: LeadSort = "score";
+
+export function parseLeadSort(value?: string): LeadSort {
+  return value && value in LEAD_SORTS ? (value as LeadSort) : DEFAULT_LEAD_SORT;
+}
+
 export interface LeadListFilters {
   search?: string;
   status?: LeadStatus;
   source?: string;
+  industry?: string;
+  serviceInterest?: string;
   minScore?: number;
   maxScore?: number;
   /** Archived leads are excluded unless this is true. */
   includeArchived?: boolean;
   onlyArchived?: boolean;
+  sort?: LeadSort;
   page?: number;
   pageSize?: number;
 }
@@ -79,6 +103,10 @@ function leadWhere(
     ...archived,
     ...(filters.status ? { status: filters.status } : {}),
     ...(filters.source ? { source: filters.source } : {}),
+    ...(filters.industry ? { industry: filters.industry } : {}),
+    ...(filters.serviceInterest
+      ? { serviceInterest: filters.serviceInterest }
+      : {}),
     ...(Object.keys(score).length > 0 ? { score } : {}),
     ...(search
       ? {
@@ -113,9 +141,23 @@ export async function listLeads(filters: LeadListFilters = {}) {
           orderBy: { scheduledAt: "asc" },
           take: 1,
         },
+        // Newest activity only, for the "Last activity" column. Bounded at one
+        // row per lead so the list stays a fixed number of queries.
+        activities: {
+          orderBy: { createdAt: "desc" },
+          take: 1,
+          select: { id: true, type: true, title: true, createdAt: true },
+        },
+        // The named decision maker, when one has been identified.
+        contacts: {
+          where: { isDecisionMaker: true },
+          orderBy: [{ isPrimary: "desc" }, { fullName: "asc" }],
+          take: 1,
+          select: { id: true, fullName: true, jobTitle: true },
+        },
         _count: { select: { contacts: true, tasks: true } },
       },
-      orderBy: [{ score: "desc" }, { updatedAt: "desc" }],
+      orderBy: LEAD_SORTS[filters.sort ?? DEFAULT_LEAD_SORT],
       skip,
       take: pageSize,
     }),
@@ -145,6 +187,49 @@ export async function listLeadSources(): Promise<string[]> {
   return rows
     .map((row) => row.source)
     .filter((source): source is string => Boolean(source && source.trim()));
+}
+
+/**
+ * Distinct industries and service interests actually present in the
+ * workspace, so the filter dropdowns only ever offer values that exist. No
+ * hardcoded taxonomy is imposed on the user.
+ */
+export async function listLeadFacets(): Promise<{
+  sources: string[];
+  industries: string[];
+  serviceInterests: string[];
+}> {
+  const { workspaceId } = await requireUser();
+
+  const clean = (values: Array<string | null>) =>
+    values.filter((value): value is string => Boolean(value && value.trim()));
+
+  const [sourceRows, industryRows, serviceRows] = await Promise.all([
+    db.lead.findMany({
+      where: { workspaceId, source: { not: null } },
+      distinct: ["source"],
+      select: { source: true },
+      orderBy: { source: "asc" },
+    }),
+    db.lead.findMany({
+      where: { workspaceId, industry: { not: null } },
+      distinct: ["industry"],
+      select: { industry: true },
+      orderBy: { industry: "asc" },
+    }),
+    db.lead.findMany({
+      where: { workspaceId, serviceInterest: { not: null } },
+      distinct: ["serviceInterest"],
+      select: { serviceInterest: true },
+      orderBy: { serviceInterest: "asc" },
+    }),
+  ]);
+
+  return {
+    sources: clean(sourceRows.map((row) => row.source)),
+    industries: clean(industryRows.map((row) => row.industry)),
+    serviceInterests: clean(serviceRows.map((row) => row.serviceInterest)),
+  };
 }
 
 /** Full lead detail. Archived leads remain viewable so they can be inspected. */

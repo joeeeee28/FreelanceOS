@@ -16,6 +16,7 @@ import {
   cancelFollowUp,
   completeFollowUp,
   createFollowUp,
+  updateFollowUp,
 } from "@/lib/crm/follow-ups";
 import { cancelTask, completeTask, createTask } from "@/lib/crm/tasks";
 import { runAction, type ActionResult } from "@/lib/crm/action-result";
@@ -320,6 +321,39 @@ export async function createFollowUpAction(
   if (result.status === "success") {
     refreshLead(leadId);
     revalidatePath("/follow-ups");
+  }
+
+  return result;
+}
+
+/**
+ * Reschedules a follow-up to a new date/time.
+ *
+ * Delegates to the existing `updateFollowUp` service, which re-checks the
+ * workspace, validates the payload and logs the reschedule as an activity.
+ */
+export async function rescheduleFollowUpAction(
+  followUpId: string,
+  _previous: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  const scheduledAt = text(formData, "scheduledAt");
+
+  const result = await runAction(
+    "rescheduleFollowUp",
+    () =>
+      updateFollowUp(followUpId, {
+        // datetime-local submits workspace-local wall time, matching how the
+        // control is rendered.
+        scheduledAt: scheduledAt ? new Date(scheduledAt) : new Date(),
+      }),
+    "Follow-up rescheduled.",
+  );
+
+  if (result.status === "success") {
+    revalidatePath("/follow-ups");
+    revalidatePath("/dashboard");
+    revalidatePath("/leads");
   }
 
   return result;

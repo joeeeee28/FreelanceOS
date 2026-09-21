@@ -1,14 +1,32 @@
 import Link from "next/link";
 import type { LeadStatus } from "@prisma/client";
 
-import { listLeadSources, listLeads, MAX_PAGE_SIZE } from "@/lib/crm/leads";
+import {
+  listLeadFacets,
+  listLeads,
+  parseLeadSort,
+  DEFAULT_LEAD_SORT,
+} from "@/lib/crm/leads";
 import { ALL_LEAD_STATUSES } from "@/lib/crm/pipeline";
 import { getWorkspaceTimeFormatters } from "@/lib/time/workspace-time";
-
-function humanise(value: string) {
-  const lower = value.replaceAll("_", " ").toLowerCase();
-  return lower.charAt(0).toUpperCase() + lower.slice(1);
-}
+import { relativeLabel } from "@/lib/time/relative";
+import { isOverdue } from "@/lib/time/zoned";
+import {
+  Badge,
+  Card,
+  EmptyState,
+  LinkButton,
+  cn,
+} from "@/components/ui/primitives";
+import {
+  Icon,
+  ScorePill,
+  StatusBadge,
+  humanise,
+} from "@/components/ui/domain";
+import { PageHeader } from "@/components/ui/page";
+import { FilterBar, FilterInput, FilterSelect } from "@/components/crm/filter-bar";
+import { Pagination } from "@/components/crm/pagination";
 
 /** Parses a query value into a known LeadStatus, ignoring anything else. */
 function parseStatus(value?: string): LeadStatus | undefined {
@@ -23,34 +41,53 @@ function parseNumber(value?: string): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+const SORT_OPTIONS = [
+  { value: "score", label: "Highest score" },
+  { value: "recent", label: "Recently updated" },
+  { value: "oldest", label: "Oldest first" },
+  { value: "company", label: "Company A–Z" },
+];
+
 export default async function LeadsPage({
   searchParams,
 }: {
   searchParams: Promise<Record<string, string | undefined>>;
 }) {
+  const now = new Date();
   const params = await searchParams;
 
   const archiveMode = params.archived ?? "active";
+  const sort = parseLeadSort(params.sort);
 
   const filters = {
     search: params.q,
     status: parseStatus(params.status),
     source: params.source || undefined,
+    industry: params.industry || undefined,
+    serviceInterest: params.service || undefined,
     minScore: parseNumber(params.minScore),
+    sort,
     page: parseNumber(params.page),
     pageSize: parseNumber(params.pageSize),
     onlyArchived: archiveMode === "only",
     includeArchived: archiveMode === "all",
   };
 
-  const [result, sources, { formatDate }] = await Promise.all([
+  const [result, facets, { formatDate }] = await Promise.all([
     listLeads(filters),
-    listLeadSources(),
+    listLeadFacets(),
     getWorkspaceTimeFormatters(),
   ]);
 
   const hasFilters = Boolean(
-    params.q || params.status || params.source || params.minScore,
+    params.q ||
+      params.status ||
+      params.source ||
+      params.industry ||
+      params.service ||
+      params.minScore ||
+      (params.archived && params.archived !== "active") ||
+      (params.sort && params.sort !== DEFAULT_LEAD_SORT),
   );
 
   /** Builds a querystring that preserves the current filters. */
@@ -61,8 +98,11 @@ export default async function LeadsPage({
       q: params.q,
       status: params.status,
       source: params.source,
+      industry: params.industry,
+      service: params.service,
       minScore: params.minScore,
       archived: params.archived,
+      sort: params.sort,
       pageSize: params.pageSize,
       page: params.page,
       ...overrides,
@@ -76,205 +116,342 @@ export default async function LeadsPage({
     return query ? `/leads?${query}` : "/leads";
   };
 
+  const columnClass = "px-3 py-2.5 text-left align-middle";
+
   return (
-    <div className="space-y-6">
-      <header className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold">Leads</h1>
-          <p className="text-muted-foreground">
-            {result.total === 0
-              ? "No leads yet."
-              : `${result.total} lead${result.total === 1 ? "" : "s"}`}
-          </p>
-        </div>
+    <div className="space-y-5">
+      <PageHeader
+        title="Leads"
+        description={
+          result.total === 0
+            ? "Companies you could be earning revenue from."
+            : `${result.total} lead${result.total === 1 ? "" : "s"}${
+                hasFilters ? " matching your filters" : ""
+              }, highest opportunity first.`
+        }
+        actions={
+          <LinkButton href="/leads/new" variant="primary">
+            <Icon name="plus" size={14} />
+            Add Lead
+          </LinkButton>
+        }
+      />
 
-        <Link
-          href="/leads/new"
-          className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground"
-        >
-          Add Lead
-        </Link>
-      </header>
+      <FilterBar active={hasFilters} clearHref="/leads">
+        <FilterInput
+          label="Search"
+          name="q"
+          type="search"
+          defaultValue={params.q}
+          placeholder="Company, contact, email, website"
+          className="sm:col-span-2"
+        />
 
-      {/* Filters submit as a GET form so state lives in the URL and the
-          filtering happens server-side. */}
-      <form method="GET" className="grid gap-3 rounded-xl border p-4 sm:grid-cols-2 lg:grid-cols-5">
-        <label className="space-y-1">
-          <span className="text-xs font-medium">Search</span>
-          <input
-            name="q"
-            defaultValue={params.q ?? ""}
-            placeholder="Company, contact, email, website"
-            className="w-full rounded-md border bg-background px-3 py-2 text-sm"
-          />
-        </label>
+        <FilterSelect
+          label="Stage"
+          name="status"
+          defaultValue={params.status}
+          placeholder="All stages"
+          options={ALL_LEAD_STATUSES.map((status) => ({
+            value: status,
+            label: humanise(status),
+          }))}
+        />
 
-        <label className="space-y-1">
-          <span className="text-xs font-medium">Status</span>
-          <select
-            name="status"
-            defaultValue={params.status ?? ""}
-            className="w-full rounded-md border bg-background px-3 py-2 text-sm"
-          >
-            <option value="">All statuses</option>
-            {ALL_LEAD_STATUSES.map((status) => (
-              <option key={status} value={status}>
-                {humanise(status)}
-              </option>
-            ))}
-          </select>
-        </label>
+        <FilterSelect
+          label="Source"
+          name="source"
+          defaultValue={params.source}
+          placeholder={
+            facets.sources.length === 0 ? "None recorded" : "All sources"
+          }
+          options={facets.sources.map((value) => ({ value, label: value }))}
+        />
 
-        <label className="space-y-1">
-          <span className="text-xs font-medium">Source</span>
-          <select
-            name="source"
-            defaultValue={params.source ?? ""}
-            className="w-full rounded-md border bg-background px-3 py-2 text-sm"
-          >
-            <option value="">All sources</option>
-            {sources.map((source) => (
-              <option key={source} value={source}>
-                {source}
-              </option>
-            ))}
-          </select>
-        </label>
+        <FilterSelect
+          label="Industry"
+          name="industry"
+          defaultValue={params.industry}
+          placeholder={
+            facets.industries.length === 0 ? "None recorded" : "All industries"
+          }
+          options={facets.industries.map((value) => ({ value, label: value }))}
+        />
 
-        <label className="space-y-1">
-          <span className="text-xs font-medium">Minimum score</span>
-          <input
-            name="minScore"
-            type="number"
-            min={0}
-            max={100}
-            defaultValue={params.minScore ?? ""}
-            className="w-full rounded-md border bg-background px-3 py-2 text-sm"
-          />
-        </label>
+        <FilterSelect
+          label="Service interest"
+          name="service"
+          defaultValue={params.service}
+          placeholder={
+            facets.serviceInterests.length === 0
+              ? "None recorded"
+              : "All services"
+          }
+          options={facets.serviceInterests.map((value) => ({
+            value,
+            label: value,
+          }))}
+        />
 
-        <label className="space-y-1">
-          <span className="text-xs font-medium">Archived</span>
-          <select
-            name="archived"
-            defaultValue={archiveMode}
-            className="w-full rounded-md border bg-background px-3 py-2 text-sm"
-          >
-            <option value="active">Active only</option>
-            <option value="all">Include archived</option>
-            <option value="only">Archived only</option>
-          </select>
-        </label>
+        <FilterInput
+          label="Min score"
+          name="minScore"
+          type="number"
+          min={0}
+          max={100}
+          defaultValue={params.minScore}
+          placeholder="0"
+        />
 
-        <div className="flex items-end gap-2 sm:col-span-2 lg:col-span-5">
-          <button className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground">
-            Apply filters
-          </button>
-          {hasFilters ? (
-            <Link href="/leads" className="rounded-md border px-4 py-2 text-sm hover:bg-muted">
-              Clear
-            </Link>
-          ) : null}
-        </div>
-      </form>
+        <FilterSelect
+          label="Sort by"
+          name="sort"
+          defaultValue={sort}
+          options={SORT_OPTIONS}
+        />
+
+        <FilterSelect
+          label="Archived"
+          name="archived"
+          defaultValue={archiveMode}
+          options={[
+            { value: "active", label: "Active only" },
+            { value: "all", label: "Include archived" },
+            { value: "only", label: "Archived only" },
+          ]}
+        />
+      </FilterBar>
 
       {result.items.length === 0 ? (
-        <div className="rounded-xl border p-8 text-center">
-          <p className="font-medium">
-            {hasFilters ? "No leads match these filters." : "No leads yet."}
-          </p>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {hasFilters
-              ? "Try widening your search."
-              : "Add your first real lead to start building your pipeline."}
-          </p>
-        </div>
+        <EmptyState
+          icon={<Icon name="leads" />}
+          title={hasFilters ? "No leads match these filters" : "No leads yet"}
+          description={
+            hasFilters
+              ? "Try a broader search, a different stage, or a lower minimum score."
+              : "Add the first company you want to win work from. Scores, follow-ups and daily revenue actions all build from here."
+          }
+          action={
+            hasFilters ? (
+              <LinkButton href="/leads" variant="secondary" size="sm">
+                Clear filters
+              </LinkButton>
+            ) : (
+              <LinkButton href="/leads/new" variant="primary" size="sm">
+                <Icon name="plus" size={14} />
+                Add your first lead
+              </LinkButton>
+            )
+          }
+        />
       ) : (
         <>
-          {/* Table on wide screens, cards on small ones. */}
-          <div className="hidden overflow-x-auto rounded-xl border md:block">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b bg-muted/40 text-left">
-                  <th className="p-3">Company</th>
-                  <th className="p-3">Status</th>
-                  <th className="p-3">Score</th>
-                  <th className="p-3">Contacts</th>
-                  <th className="p-3">Source</th>
-                  <th className="p-3">Next follow-up</th>
-                </tr>
-              </thead>
-              <tbody>
-                {result.items.map((lead) => (
-                  <tr key={lead.id} className="border-b last:border-0 hover:bg-muted/30">
-                    <td className="p-3">
-                      <Link href={`/leads/${lead.id}`} className="font-medium hover:underline">
-                        {lead.companyName}
-                      </Link>
-                      {lead.deletedAt ? (
-                        <span className="ml-2 text-xs text-muted-foreground">Archived</span>
-                      ) : null}
-                      <p className="text-xs text-muted-foreground">
-                        {lead.contactName ?? "—"}
-                      </p>
-                    </td>
-                    <td className="p-3">{humanise(lead.status)}</td>
-                    <td className="p-3 font-medium">{lead.score}</td>
-                    <td className="p-3">{lead._count.contacts}</td>
-                    <td className="p-3">{lead.source ?? "—"}</td>
-                    <td className="p-3">
-                      {lead.followUps[0] ? formatDate(lead.followUps[0].scheduledAt) : "—"}
-                    </td>
+          {/* Dense table on wide screens. */}
+          <Card className="hidden overflow-hidden md:block">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[60rem] text-sm">
+                <thead>
+                  <tr className="border-b border-border bg-surface-muted text-2xs uppercase tracking-wide text-subtle-foreground">
+                    <th scope="col" className={columnClass}>Company</th>
+                    <th scope="col" className={columnClass}>Contact</th>
+                    <th scope="col" className={columnClass}>Service opportunity</th>
+                    <th scope="col" className={columnClass}>Stage</th>
+                    <th scope="col" className={columnClass}>Score</th>
+                    <th scope="col" className={columnClass}>Decision maker</th>
+                    <th scope="col" className={columnClass}>Last activity</th>
+                    <th scope="col" className={columnClass}>Next action</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
 
-          <div className="space-y-3 md:hidden">
-            {result.items.map((lead) => (
-              <Link
-                key={lead.id}
-                href={`/leads/${lead.id}`}
-                className="block rounded-xl border p-4"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="font-medium">{lead.companyName}</p>
-                    <p className="text-sm text-muted-foreground">{humanise(lead.status)}</p>
-                  </div>
-                  <span className="text-lg font-semibold">{lead.score}</span>
-                </div>
-              </Link>
-            ))}
-          </div>
+                <tbody>
+                  {result.items.map((lead) => {
+                    const followUp = lead.followUps[0];
+                    const activity = lead.activities[0];
+                    const decisionMaker = lead.contacts[0];
+                    const overdue = followUp
+                      ? isOverdue(followUp.scheduledAt, now)
+                      : false;
 
-          <nav className="flex flex-wrap items-center justify-between gap-3">
-            <p className="text-sm text-muted-foreground">
-              Page {result.page} of {result.totalPages} · {result.pageSize} per page
-              {result.pageSize === MAX_PAGE_SIZE ? " (max)" : ""}
-            </p>
+                    return (
+                      <tr
+                        key={lead.id}
+                        className="border-b border-border last:border-0 hover:bg-muted/40"
+                      >
+                        <td className={columnClass}>
+                          <Link
+                            href={`/leads/${lead.id}`}
+                            className="font-medium text-foreground hover:text-accent"
+                          >
+                            {lead.companyName}
+                          </Link>
 
-            <div className="flex gap-2">
-              {result.page > 1 ? (
-                <Link
-                  href={linkTo({ page: result.page - 1 })}
-                  className="rounded-md border px-3 py-1.5 text-sm hover:bg-muted"
-                >
-                  Previous
-                </Link>
-              ) : null}
+                          <p className="mt-0.5 flex items-center gap-1.5 text-2xs text-subtle-foreground">
+                            {lead.industry ?? "Industry unknown"}
+                            {lead.deletedAt ? (
+                              <Badge tone="neutral">Archived</Badge>
+                            ) : null}
+                          </p>
+                        </td>
 
-              {result.page < result.totalPages ? (
-                <Link
-                  href={linkTo({ page: result.page + 1 })}
-                  className="rounded-md border px-3 py-1.5 text-sm hover:bg-muted"
-                >
-                  Next
-                </Link>
-              ) : null}
+                        <td className={columnClass}>
+                          {lead.contactName ? (
+                            <span className="text-foreground">{lead.contactName}</span>
+                          ) : (
+                            <span className="text-subtle-foreground">Unknown</span>
+                          )}
+                          <p className="mt-0.5 text-2xs text-subtle-foreground">
+                            {lead._count.contacts}{" "}
+                            {lead._count.contacts === 1 ? "contact" : "contacts"}
+                          </p>
+                        </td>
+
+                        <td className={cn(columnClass, "max-w-[14rem]")}>
+                          {lead.serviceInterest ? (
+                            <span className="text-foreground">
+                              {lead.serviceInterest}
+                            </span>
+                          ) : (
+                            <span className="text-subtle-foreground">
+                              Not identified
+                            </span>
+                          )}
+                        </td>
+
+                        <td className={columnClass}>
+                          <StatusBadge status={lead.status} />
+                        </td>
+
+                        <td className={columnClass}>
+                          <ScorePill score={lead.score} />
+                        </td>
+
+                        <td className={columnClass}>
+                          {decisionMaker ? (
+                            <>
+                              <span className="text-foreground">
+                                {decisionMaker.fullName}
+                              </span>
+                              {decisionMaker.jobTitle ? (
+                                <p className="mt-0.5 text-2xs text-subtle-foreground">
+                                  {decisionMaker.jobTitle}
+                                </p>
+                              ) : null}
+                            </>
+                          ) : lead.decisionMakerIdentified ? (
+                            <span className="text-muted-foreground">
+                              Identified
+                            </span>
+                          ) : (
+                            <span className="text-subtle-foreground">
+                              Not identified
+                            </span>
+                          )}
+                        </td>
+
+                        <td className={columnClass}>
+                          {activity ? (
+                            <>
+                              <span
+                                className="text-foreground"
+                                title={activity.title}
+                              >
+                                {relativeLabel(activity.createdAt, now)}
+                              </span>
+                              <p className="mt-0.5 max-w-[10rem] truncate text-2xs text-subtle-foreground">
+                                {humanise(activity.type)}
+                              </p>
+                            </>
+                          ) : (
+                            <span className="text-subtle-foreground">None</span>
+                          )}
+                        </td>
+
+                        <td className={columnClass}>
+                          {followUp ? (
+                            <>
+                              <span
+                                className={cn(
+                                  "font-medium",
+                                  overdue ? "text-danger" : "text-foreground",
+                                )}
+                              >
+                                {overdue ? "Overdue" : formatDate(followUp.scheduledAt)}
+                              </span>
+                              <p className="mt-0.5 text-2xs text-subtle-foreground">
+                                {humanise(followUp.channel)}
+                              </p>
+                            </>
+                          ) : (
+                            <Link
+                              href={`/leads/${lead.id}`}
+                              className="text-2xs font-medium text-accent hover:underline"
+                            >
+                              Schedule follow-up
+                            </Link>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
-          </nav>
+          </Card>
+
+          {/* Cards below the table breakpoint. */}
+          <div className="space-y-2.5 md:hidden">
+            {result.items.map((lead) => {
+              const followUp = lead.followUps[0];
+              const overdue = followUp
+                ? isOverdue(followUp.scheduledAt, now)
+                : false;
+
+              return (
+                <Link
+                  key={lead.id}
+                  href={`/leads/${lead.id}`}
+                  className="block rounded-xl border border-border bg-surface p-4 shadow-xs transition-colors hover:border-border-strong"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate font-medium">{lead.companyName}</p>
+                      <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                        {lead.contactName ?? "No contact recorded"}
+                      </p>
+                    </div>
+                    <ScorePill score={lead.score} />
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                    <StatusBadge status={lead.status} />
+                    {lead.deletedAt ? <Badge tone="neutral">Archived</Badge> : null}
+                    {followUp ? (
+                      <Badge tone={overdue ? "danger" : "info"}>
+                        {overdue
+                          ? "Follow-up overdue"
+                          : `Follow-up ${formatDate(followUp.scheduledAt)}`}
+                      </Badge>
+                    ) : null}
+                  </div>
+
+                  {lead.serviceInterest ? (
+                    <p className="mt-2.5 text-xs text-muted-foreground">
+                      {lead.serviceInterest}
+                    </p>
+                  ) : null}
+                </Link>
+              );
+            })}
+          </div>
+
+          <Pagination
+            page={result.page}
+            pageSize={result.pageSize}
+            total={result.total}
+            totalPages={result.totalPages}
+            linkTo={linkTo}
+            noun="lead"
+          />
         </>
       )}
     </div>

@@ -67,6 +67,41 @@ export async function listTasks(filters: TaskFilters = {}) {
   };
 }
 
+/**
+ * Counts for the Today / Upcoming / Overdue / Completed views.
+ *
+ * Four database counts rather than loading rows, evaluated against the
+ * workspace's calendar day so the tab badges agree with the lists.
+ */
+export async function countTaskViews(): Promise<{
+  today: number;
+  upcoming: number;
+  overdue: number;
+  completed: number;
+}> {
+  const { workspaceId, workspace } = await requireUser();
+
+  const { todayRangeInZone } = await import("@/lib/time/zoned");
+  const { start, end } = todayRangeInZone(workspace.timezone);
+
+  const open: TaskStatus[] = ["TODO", "IN_PROGRESS"];
+
+  const [today, upcoming, overdue, completed] = await Promise.all([
+    db.task.count({
+      where: { workspaceId, dueAt: { gte: start, lt: end }, status: { in: open } },
+    }),
+    db.task.count({
+      where: { workspaceId, dueAt: { gte: end }, status: { in: open } },
+    }),
+    db.task.count({
+      where: { workspaceId, dueAt: { lt: start }, status: { in: open } },
+    }),
+    db.task.count({ where: { workspaceId, status: "DONE" } }),
+  ]);
+
+  return { today, upcoming, overdue, completed };
+}
+
 /** Verifies that any referenced lead/contact belongs to the caller. */
 async function assertRelations(
   tx: Parameters<Parameters<typeof db.$transaction>[0]>[0],

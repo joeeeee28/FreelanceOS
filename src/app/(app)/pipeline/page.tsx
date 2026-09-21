@@ -4,14 +4,16 @@ import { db } from "@/lib/db";
 import { requireUser } from "@/lib/auth/require-user";
 import { PIPELINE_STAGES, STATUS_STAGE, nextStatuses } from "@/lib/crm/pipeline";
 import { StatusControl } from "@/components/crm/lead-detail-panels";
-import { formatInZone } from "@/lib/time/zoned";
+import { formatInZone, isOverdue } from "@/lib/time/zoned";
+import { EmptyState, LinkButton, cn } from "@/components/ui/primitives";
+import { Icon, ScorePill, StatusBadge, humanise } from "@/components/ui/domain";
+import { PageHeader } from "@/components/ui/page";
 
-function humanise(value: string) {
-  const lower = value.replaceAll("_", " ").toLowerCase();
-  return lower.charAt(0).toUpperCase() + lower.slice(1);
-}
+/** Columns that mean the deal is closed, styled apart from live work. */
+const CLOSED_STAGES = new Set(["WON", "LOST"]);
 
 export default async function PipelinePage() {
+  const now = new Date();
   const { workspaceId, workspace } = await requireUser();
 
   // Archived leads are excluded; the board is scoped to the caller's
@@ -26,7 +28,7 @@ export default async function PipelinePage() {
       },
       contacts: {
         where: { isPrimary: true },
-        select: { fullName: true },
+        select: { fullName: true, jobTitle: true },
         take: 1,
       },
     },
@@ -40,80 +42,174 @@ export default async function PipelinePage() {
   }
 
   return (
-    <div className="space-y-6">
-      <header>
-        <h1 className="text-2xl font-semibold">Pipeline</h1>
-        <p className="text-muted-foreground">
-          {leads.length === 0
-            ? "No active opportunities yet."
-            : `${leads.length} active lead${leads.length === 1 ? "" : "s"}`}
-        </p>
-      </header>
+    <div className="space-y-5">
+      <PageHeader
+        title="Pipeline"
+        description={
+          leads.length === 0
+            ? "Every active lead, arranged by the stage it has reached."
+            : `${leads.length} active lead${leads.length === 1 ? "" : "s"} across ${PIPELINE_STAGES.length} stages. Move a lead with the control on its card.`
+        }
+        actions={
+          <>
+            <LinkButton href="/leads" variant="secondary">
+              Table view
+            </LinkButton>
+            <LinkButton href="/leads/new" variant="primary">
+              <Icon name="plus" size={14} />
+              Add Lead
+            </LinkButton>
+          </>
+        }
+      />
 
       {leads.length === 0 ? (
-        <div className="rounded-xl border p-8 text-center">
-          <p className="font-medium">Your pipeline is empty.</p>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Add and qualify a lead to see it move through the pipeline.
-          </p>
-          <Link
-            href="/leads/new"
-            className="mt-4 inline-block rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground"
-          >
-            Add Lead
-          </Link>
-        </div>
+        <EmptyState
+          icon={<Icon name="pipeline" />}
+          title="Your pipeline is empty"
+          description="Add a lead and it will appear here. As you qualify, contact and negotiate, the card moves across the board through validated stage transitions."
+          action={
+            <LinkButton href="/leads/new" variant="primary" size="sm">
+              <Icon name="plus" size={14} />
+              Add your first lead
+            </LinkButton>
+          }
+        />
       ) : (
-        <div className="flex gap-4 overflow-x-auto pb-4">
+        <div className="no-scrollbar -mx-4 flex gap-4 overflow-x-auto px-4 pb-4 sm:mx-0 sm:px-0">
           {PIPELINE_STAGES.map((stage) => {
             const items = byStage.get(stage)!;
+            const closed = CLOSED_STAGES.has(stage);
+
+            // Column-level intelligence that is real: how many, and the best
+            // score in the column. No monetary value exists to total.
+            const topScore = items.reduce(
+              (best, lead) => Math.max(best, lead.score),
+              0,
+            );
 
             return (
-              <section key={stage} className="w-80 shrink-0 rounded-xl bg-muted/40 p-3">
-                <div className="mb-3 flex items-center justify-between">
-                  <h2 className="text-sm font-semibold">{humanise(stage)}</h2>
-                  <span className="rounded-full bg-background px-2 py-0.5 text-xs">
+              <section
+                key={stage}
+                aria-label={`${humanise(stage)} stage`}
+                className="flex w-[19rem] shrink-0 flex-col rounded-xl border border-border bg-surface-muted"
+              >
+                <header className="flex items-center justify-between gap-2 border-b border-border px-3 py-2.5">
+                  <div className="min-w-0">
+                    <h2
+                      className={cn(
+                        "truncate text-xs font-semibold uppercase tracking-wide",
+                        closed ? "text-subtle-foreground" : "text-foreground",
+                      )}
+                    >
+                      {humanise(stage)}
+                    </h2>
+                    <p className="mt-0.5 text-2xs text-subtle-foreground">
+                      {items.length === 0
+                        ? "Empty"
+                        : `Top score ${topScore}`}
+                    </p>
+                  </div>
+
+                  <span className="tabular shrink-0 rounded-md bg-surface px-1.5 py-0.5 text-2xs font-semibold text-muted-foreground ring-1 ring-inset ring-border">
                     {items.length}
                   </span>
-                </div>
+                </header>
 
-                <div className="space-y-3">
+                <div className="flex-1 space-y-2.5 p-2.5">
                   {items.length === 0 ? (
-                    <p className="px-1 py-4 text-xs text-muted-foreground">Nothing here.</p>
+                    <p className="rounded-lg border border-dashed border-border px-3 py-6 text-center text-2xs text-subtle-foreground">
+                      No leads at this stage
+                    </p>
                   ) : (
-                    items.map((lead) => (
-                      <article key={lead.id} className="rounded-lg border bg-background p-3">
-                        <Link href={`/leads/${lead.id}`} className="font-medium hover:underline">
-                          {lead.companyName}
-                        </Link>
+                    items.map((lead) => {
+                      const followUp = lead.followUps[0];
+                      const overdue = followUp
+                        ? isOverdue(followUp.scheduledAt, now)
+                        : false;
+                      const contact = lead.contacts[0];
 
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          Score {lead.score}
-                          {lead.contacts[0] ? ` · ${lead.contacts[0].fullName}` : ""}
-                        </p>
+                      return (
+                        <article
+                          key={lead.id}
+                          className="rounded-lg border border-border bg-surface p-3 shadow-xs"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <Link
+                              href={`/leads/${lead.id}`}
+                              className="min-w-0 text-sm font-medium leading-snug text-foreground hover:text-accent"
+                            >
+                              {lead.companyName}
+                            </Link>
+                            <ScorePill score={lead.score} compact />
+                          </div>
 
-                        {lead.status !== stage ? (
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            {humanise(lead.status)}
-                          </p>
-                        ) : null}
+                          {/* Grouped statuses keep their real label. */}
+                          {lead.status !== stage ? (
+                            <div className="mt-1.5">
+                              <StatusBadge status={lead.status} />
+                            </div>
+                          ) : null}
 
-                        {lead.followUps[0] ? (
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            Next:{" "}
-                            {formatInZone(lead.followUps[0].scheduledAt, workspace.timezone)}
-                          </p>
-                        ) : null}
+                          {lead.serviceInterest ? (
+                            <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
+                              {lead.serviceInterest}
+                            </p>
+                          ) : null}
 
-                        <div className="mt-3">
-                          <StatusControl
-                            leadId={lead.id}
-                            current={lead.status}
-                            allowed={[...nextStatuses(lead.status)]}
-                          />
-                        </div>
-                      </article>
-                    ))
+                          <dl className="mt-2.5 space-y-1 text-2xs">
+                            <div className="flex gap-1.5">
+                              <dt className="text-subtle-foreground">Contact</dt>
+                              <dd className="min-w-0 truncate text-muted-foreground">
+                                {contact?.fullName ??
+                                  lead.contactName ?? (
+                                    <span className="text-subtle-foreground">
+                                      Unknown
+                                    </span>
+                                  )}
+                                {contact?.jobTitle ? ` · ${contact.jobTitle}` : ""}
+                              </dd>
+                            </div>
+
+                            <div className="flex gap-1.5">
+                              <dt className="text-subtle-foreground">Next</dt>
+                              <dd
+                                className={cn(
+                                  "min-w-0 truncate",
+                                  overdue
+                                    ? "font-medium text-danger"
+                                    : "text-muted-foreground",
+                                )}
+                              >
+                                {followUp ? (
+                                  <>
+                                    {overdue ? "Overdue · " : ""}
+                                    {humanise(followUp.channel)}{" "}
+                                    {formatInZone(
+                                      followUp.scheduledAt,
+                                      workspace.timezone,
+                                    )}
+                                  </>
+                                ) : (
+                                  <span className="text-subtle-foreground">
+                                    Nothing scheduled
+                                  </span>
+                                )}
+                              </dd>
+                            </div>
+                          </dl>
+
+                          <div className="mt-3 border-t border-border pt-2.5">
+                            <StatusControl
+                              leadId={lead.id}
+                              current={lead.status}
+                              allowed={[...nextStatuses(lead.status)]}
+                              compact
+                            />
+                          </div>
+                        </article>
+                      );
+                    })
                   )}
                 </div>
               </section>

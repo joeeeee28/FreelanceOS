@@ -3,10 +3,20 @@
 import { useFormStatus } from "react-dom";
 
 import type { ActionResult } from "@/lib/crm/action-result";
+import { Icon } from "@/components/ui/domain";
+import { buttonClass, cn } from "@/components/ui/primitives";
 
-/** Shared input styling so every CRM form looks consistent. */
+/**
+ * Shared control styling so every CRM form looks consistent.
+ *
+ * The public API of this module is unchanged — only the presentation is.
+ */
 const BASE_INPUT =
-  "w-full rounded-md border bg-background px-3 py-2 text-sm disabled:opacity-60";
+  "w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-foreground " +
+  "placeholder:text-subtle-foreground transition-colors hover:border-border-strong " +
+  "disabled:cursor-not-allowed disabled:opacity-60";
+
+const INVALID_INPUT = "border-danger hover:border-danger";
 
 export function Field({
   label,
@@ -22,15 +32,30 @@ export function Field({
   hint?: string;
 }) {
   const errorId = `${name}-error`;
+  const hasErrors = Boolean(errors?.length);
 
   return (
-    <label className="block space-y-1">
-      <span className="text-sm font-medium">{label}</span>
+    <label className="block">
+      <span className="mb-1 block text-xs font-medium text-foreground">
+        {label}
+      </span>
+
       {children}
-      {hint ? <span className="block text-xs text-muted-foreground">{hint}</span> : null}
-      {errors?.length ? (
-        <span id={errorId} className="block text-xs text-destructive">
-          {errors.join(" ")}
+
+      {/* Hint stays visible next to the error so the user keeps the guidance. */}
+      {hint ? (
+        <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
+          {hint}
+        </span>
+      ) : null}
+
+      {hasErrors ? (
+        <span
+          id={errorId}
+          className="mt-1 flex items-start gap-1 text-xs font-medium text-danger"
+        >
+          <Icon name="alert" size={12} className="mt-px shrink-0" />
+          {errors!.join(" ")}
         </span>
       ) : null}
     </label>
@@ -60,7 +85,8 @@ export function TextInput({
       placeholder={placeholder}
       defaultValue={defaultValue ?? ""}
       aria-invalid={invalid || undefined}
-      className={`${BASE_INPUT} ${invalid ? "border-destructive" : ""}`}
+      aria-describedby={invalid ? `${name}-error` : undefined}
+      className={cn(BASE_INPUT, invalid && INVALID_INPUT)}
     />
   );
 }
@@ -70,19 +96,23 @@ export function TextArea({
   defaultValue,
   rows = 3,
   invalid,
+  placeholder,
 }: {
   name: string;
   defaultValue?: string | null;
   rows?: number;
   invalid?: boolean;
+  placeholder?: string;
 }) {
   return (
     <textarea
       name={name}
       rows={rows}
+      placeholder={placeholder}
       defaultValue={defaultValue ?? ""}
       aria-invalid={invalid || undefined}
-      className={`${BASE_INPUT} ${invalid ? "border-destructive" : ""}`}
+      aria-describedby={invalid ? `${name}-error` : undefined}
+      className={cn(BASE_INPUT, "resize-y leading-relaxed", invalid && INVALID_INPUT)}
     />
   );
 }
@@ -103,7 +133,8 @@ export function Select({
       name={name}
       defaultValue={defaultValue ?? ""}
       aria-invalid={invalid || undefined}
-      className={`${BASE_INPUT} ${invalid ? "border-destructive" : ""}`}
+      aria-describedby={invalid ? `${name}-error` : undefined}
+      className={cn(BASE_INPUT, "pr-8", invalid && INVALID_INPUT)}
     >
       {options.map((option) => (
         <option key={option.value} value={option.value}>
@@ -118,20 +149,27 @@ export function Checkbox({
   name,
   label,
   defaultChecked,
+  hint,
 }: {
   name: string;
   label: string;
   defaultChecked?: boolean;
+  hint?: string;
 }) {
   return (
-    <label className="flex items-center gap-2 text-sm">
+    <label className="flex cursor-pointer items-start gap-2.5 rounded-md border border-border bg-surface px-3 py-2.5 transition-colors hover:border-border-strong">
       <input
         type="checkbox"
         name={name}
         defaultChecked={defaultChecked}
-        className="h-4 w-4 rounded border"
+        className="mt-0.5 h-4 w-4 shrink-0 rounded border-border accent-[hsl(var(--accent))]"
       />
-      {label}
+      <span>
+        <span className="block text-sm text-foreground">{label}</span>
+        {hint ? (
+          <span className="mt-0.5 block text-xs text-muted-foreground">{hint}</span>
+        ) : null}
+      </span>
     </label>
   );
 }
@@ -139,23 +177,22 @@ export function Checkbox({
 export function SubmitButton({
   children = "Save",
   variant = "primary",
+  size = "md",
 }: {
   children?: React.ReactNode;
   variant?: "primary" | "secondary" | "danger";
+  size?: "sm" | "md";
 }) {
   const { pending } = useFormStatus();
-
-  const styles = {
-    primary: "bg-primary text-primary-foreground",
-    secondary: "border hover:bg-muted",
-    danger: "border border-destructive/50 text-destructive hover:bg-destructive/10",
-  }[variant];
 
   return (
     <button
       type="submit"
       disabled={pending}
-      className={`rounded-md px-4 py-2 text-sm transition-colors disabled:opacity-60 ${styles}`}
+      // aria-busy tells assistive tech the control is working, since the
+      // label change alone is not announced reliably.
+      aria-busy={pending || undefined}
+      className={buttonClass(variant, size)}
     >
       {pending ? "Working…" : children}
     </button>
@@ -168,8 +205,9 @@ export function FormStatus({ state }: { state: ActionResult }) {
     return (
       <p
         role="alert"
-        className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+        className="flex items-start gap-2 rounded-md border border-danger/30 bg-danger-subtle px-3 py-2 text-sm text-danger"
       >
+        <Icon name="alert" size={14} className="mt-0.5 shrink-0" />
         {state.message}
       </p>
     );
@@ -179,8 +217,9 @@ export function FormStatus({ state }: { state: ActionResult }) {
     return (
       <p
         role="status"
-        className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-400"
+        className="flex items-start gap-2 rounded-md border border-success/30 bg-success-subtle px-3 py-2 text-sm text-success"
       >
+        <Icon name="check" size={14} className="mt-0.5 shrink-0" />
         {state.message}
       </p>
     );

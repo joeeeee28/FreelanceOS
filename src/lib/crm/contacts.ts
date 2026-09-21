@@ -10,6 +10,8 @@ export async function listContacts(
   filters: {
     search?: string;
     decisionMakersOnly?: boolean;
+    /** Restricts to contacts belonging to one lead/company. */
+    leadId?: string;
     page?: number;
     pageSize?: number;
   } = {},
@@ -20,7 +22,10 @@ export async function listContacts(
 
   const where = {
     workspaceId,
+    // The leadId filter is still ANDed with workspaceId, so it cannot be used
+    // to reach another workspace's contacts.
     lead: { deletedAt: null },
+    ...(filters.leadId ? { leadId: filters.leadId } : {}),
     ...(filters.decisionMakersOnly ? { isDecisionMaker: true } : {}),
     ...(search
       ? {
@@ -36,7 +41,22 @@ export async function listContacts(
   const [items, total] = await Promise.all([
     db.contact.findMany({
       where,
-      include: { lead: { select: { id: true, companyName: true } } },
+      include: {
+        lead: { select: { id: true, companyName: true } },
+        // Newest activity and next scheduled follow-up, bounded to one row
+        // each so the directory stays a fixed number of queries.
+        activities: {
+          orderBy: { createdAt: "desc" },
+          take: 1,
+          select: { id: true, type: true, createdAt: true },
+        },
+        followUps: {
+          where: { status: "SCHEDULED" },
+          orderBy: { scheduledAt: "asc" },
+          take: 1,
+          select: { id: true, channel: true, scheduledAt: true },
+        },
+      },
       orderBy: [{ isPrimary: "desc" }, { fullName: "asc" }],
       skip,
       take: pageSize,
@@ -51,6 +71,28 @@ export async function listContacts(
     total,
     totalPages: Math.max(Math.ceil(total / pageSize), 1),
   } satisfies Paginated<(typeof items)[number]>;
+}
+
+/**
+ * Companies that actually have contacts, for the directory's company filter.
+ * Derived from the data rather than listing every lead.
+ */
+export async function listContactCompanies(): Promise<
+  Array<{ id: string; companyName: string }>
+> {
+  const { workspaceId } = await requireUser();
+
+  const leads = await db.lead.findMany({
+    where: {
+      workspaceId,
+      deletedAt: null,
+      contacts: { some: {} },
+    },
+    select: { id: true, companyName: true },
+    orderBy: { companyName: "asc" },
+  });
+
+  return leads;
 }
 
 export async function createContact(input: unknown) {
