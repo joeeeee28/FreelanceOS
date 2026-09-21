@@ -335,3 +335,23 @@ export function canonicalPersonName(
 
   return words.length === 0 ? null : words.join(" ");
 }
+
+/**
+ * A stable key for deduplicating candidate businesses within one run.
+ *
+ * Prefers the registrable domain, because that is the real identity. Falls
+ * back to the origin for hosts that have no registrable domain (an IP address,
+ * or a single-label intranet host). Falling back matters: dropping those
+ * outright would silently discard real businesses, which is exactly the kind
+ * of quiet data loss that is hardest to notice.
+ */
+export function entityKey(url: string): string | null {
+  const domain = canonicalDomain(url);
+  if (domain !== null) return domain;
+
+  try {
+    return new URL(url.includes("://") ? url : `https://${url}`).origin.toLowerCase();
+  } catch {
+    return null;
+  }
+}

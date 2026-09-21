@@ -47,7 +47,10 @@ export interface WebsiteProviderConfig {
 export const websiteProvider: DiscoveryProvider = {
   key: "website",
   label: "Business website",
+  category: "WEBSITE",
   requiresNetwork: true,
+  description:
+    "Reads what a business publishes about itself on its own site, guided by its sitemap.",
 
   async run(context: DiscoveryContext): Promise<DiscoveryResult> {
     const config = context.config as WebsiteProviderConfig;

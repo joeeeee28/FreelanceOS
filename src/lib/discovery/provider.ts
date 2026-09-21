@@ -126,6 +126,71 @@ export function emptyResult(): DiscoveryResult {
 }
 
 /**
+ * Provider categories.
+ *
+ * Purely descriptive: used to group sources in the UI and to let an operator
+ * enable or disable a whole class of source at once. The engine treats every
+ * provider identically regardless of category.
+ */
+export const PROVIDER_CATEGORIES = [
+  "PUBLIC_WEB",
+  "WEBSITE",
+  "SITEMAP",
+  "FEED",
+  "PUBLIC_JOBS",
+  "CAREER_PAGE",
+  "PUBLIC_DIRECTORY",
+  "REPOSITORY",
+  "PUBLIC_MEDIA",
+  "MANUAL",
+] as const;
+
+export type ProviderCategory = (typeof PROVIDER_CATEGORIES)[number];
+
+/**
+ * Result of validating a normalised entity before it is stored.
+ *
+ * Validation is a distinct lifecycle step so a provider cannot push junk
+ * straight into the database: anything that fails here is dropped with a
+ * recorded reason rather than persisted.
+ */
+export type ValidationResult =
+  | { valid: true }
+  | { valid: false; reason: string };
+
+/**
+ * Validates a normalised entity.
+ *
+ * The bar is deliberately low but absolute: an entity must be identifiable
+ * (a name or a domain) and every fact must declare how it was extracted.
+ * Anything subtler is the resolver's job.
+ */
+export function validateEntity(entity: {
+  identity: { name?: string | null; website?: string | null; domain?: string | null };
+  facts: readonly { field: string; method: string }[];
+}): ValidationResult {
+  const hasName =
+    typeof entity.identity.name === "string" && entity.identity.name.trim() !== "";
+  const hasDomain =
+    (typeof entity.identity.domain === "string" &&
+      entity.identity.domain.trim() !== "") ||
+    (typeof entity.identity.website === "string" &&
+      entity.identity.website.trim() !== "");
+
+  if (!hasName && !hasDomain) {
+    return { valid: false, reason: "No usable company name or domain" };
+  }
+
+  for (const fact of entity.facts) {
+    if (typeof fact.method !== "string" || fact.method === "") {
+      return { valid: false, reason: `Fact "${fact.field}" has no extraction method` };
+    }
+  }
+
+  return { valid: true };
+}
+
+/**
  * A source of businesses.
  *
  * `run` must be safe to call repeatedly: the ingest path deduplicates, so a
@@ -136,8 +201,11 @@ export interface DiscoveryProvider {
   /** Stable machine key stored on Source.provider. */
   readonly key: string;
   readonly label: string;
+  readonly category: ProviderCategory;
   /** False for providers that consume uploads instead of fetching. */
   readonly requiresNetwork: boolean;
+  /** Human description shown when configuring a source. */
+  readonly description?: string;
   run(context: DiscoveryContext): Promise<DiscoveryResult>;
 }
 
@@ -163,5 +231,14 @@ export class ProviderRegistry {
 
   keys(): string[] {
     return [...this.providers.keys()];
+  }
+
+  /** Providers in one category, for grouped configuration screens. */
+  byCategory(category: ProviderCategory): DiscoveryProvider[] {
+    return this.list().filter((provider) => provider.category === category);
+  }
+
+  has(key: string): boolean {
+    return this.providers.has(key);
   }
 }
