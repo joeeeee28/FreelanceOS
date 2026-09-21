@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { listLeads } from "@/lib/crm/leads";
+import { getWorkspaceTimeFormatters } from "@/lib/time/workspace-time";
 
 export default async function LeadsPage({
   searchParams,
@@ -8,6 +9,7 @@ export default async function LeadsPage({
 }) {
   const params = await searchParams;
   const leads = await listLeads(params.q);
+  const { formatDate } = await getWorkspaceTimeFormatters();
 
   return (
     <div className="space-y-6">
@@ -101,7 +103,7 @@ export default async function LeadsPage({
                   </td>
                   <td className="p-3">
                     {lead.followUps[0]
-                      ? lead.followUps[0].scheduledAt.toLocaleDateString()
+                      ? formatDate(lead.followUps[0].scheduledAt)
                       : "—"}
                   </td>
                 </tr>

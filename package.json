@@ -2,7 +2,7 @@
   "name": "freelanceos",
   "version": "0.1.0",
   "private": true,
-  "description": "Personal freelance business operating system — lead, contact, activity, task and follow-up management.",
+  "description": "Personal freelance business operating system \u2014 lead, contact, activity, task and follow-up management.",
   "engines": {
     "node": ">=20"
   },
@@ -14,7 +14,10 @@
     "lint": "eslint .",
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",
-    "prisma:migrate": "prisma migrate dev"
+    "prisma:migrate": "prisma migrate dev",
+    "test": "npm run test:generate && vitest run",
+    "test:watch": "vitest",
+    "test:generate": "node scripts/generate-test-client.mjs"
   },
   "dependencies": {
     "@prisma/client": "6.19.3",
@@ -30,16 +33,20 @@
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.7",
+    "@prisma/adapter-pg": "^6.19.3",
     "@types/bcryptjs": "2.4.6",
     "@types/node": "20.19.9",
+    "@types/pg": "^8.11.10",
     "@types/react": "19.2.0",
     "@types/react-dom": "19.2.0",
     "autoprefixer": "10.4.21",
     "eslint": "9.39.5",
     "eslint-config-next": "15.5.25",
+    "pg": "^8.16.3",
     "postcss": "8.5.28",
     "prisma": "6.19.3",
     "tailwindcss": "3.4.19",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "vitest": "^3.2.7"
   }
 }

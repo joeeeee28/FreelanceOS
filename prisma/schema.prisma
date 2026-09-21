@@ -62,9 +62,15 @@ model User {
 }
 
 model Session {
-  id        String   @id @default(cuid())
-  userId    String
-  token     String   @unique
+  id String @id @default(cuid())
+
+  userId String
+
+  /// SHA-256 digest of the session bearer token. The raw token is only ever
+  /// held by the browser in an HTTP-only cookie and is never persisted, so a
+  /// read-only disclosure of this table yields no usable credentials.
+  tokenHash String @unique
+
   expiresAt DateTime
   createdAt DateTime @default(now())
 

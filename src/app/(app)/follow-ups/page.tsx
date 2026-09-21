@@ -1,7 +1,9 @@
 import { listFollowUps } from "@/lib/crm/follow-ups";
+import { getWorkspaceTimeFormatters } from "@/lib/time/workspace-time";
 
 export default async function FollowUpsPage() {
   const followUps = await listFollowUps();
+  const { formatDateTime } = await getWorkspaceTimeFormatters();
 
   return (
     <div>
@@ -28,7 +30,7 @@ export default async function FollowUpsPage() {
                 {item.status}
               </p>
               <p className="mt-2 text-sm">
-                {item.scheduledAt.toLocaleString()}
+                {formatDateTime(item.scheduledAt)}
               </p>
             </div>
           ))

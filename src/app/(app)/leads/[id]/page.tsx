@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { getLead } from "@/lib/crm/leads";
+import { getWorkspaceTimeFormatters } from "@/lib/time/workspace-time";
 
 export default async function LeadPage({
   params,
@@ -8,6 +9,7 @@ export default async function LeadPage({
 }) {
   const { id } = await params;
   const lead = await getLead(id);
+  const { formatDateTime } = await getWorkspaceTimeFormatters();
 
   if (!lead) notFound();
 
@@ -87,7 +89,7 @@ export default async function LeadPage({
                   {activity.title}
                 </p>
                 <p className="text-sm text-muted-foreground">
-                  {activity.createdAt.toLocaleString()}
+                  {formatDateTime(activity.createdAt)}
                 </p>
                 {activity.description && (
                   <p className="mt-1">

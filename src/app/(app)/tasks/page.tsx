@@ -1,7 +1,9 @@
 import { listTasks } from "@/lib/crm/tasks";
+import { getWorkspaceTimeFormatters } from "@/lib/time/workspace-time";
 
 export default async function TasksPage() {
   const tasks = await listTasks();
+  const { formatDateTime } = await getWorkspaceTimeFormatters();
 
   return (
     <div>
@@ -35,7 +37,7 @@ export default async function TasksPage() {
 
               {task.dueAt && (
                 <p className="mt-2 text-sm">
-                  Due {task.dueAt.toLocaleString()}
+                  Due {formatDateTime(task.dueAt)}
                 </p>
               )}
             </div>

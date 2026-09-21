@@ -1,17 +1,20 @@
 import "server-only";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/auth/require-user";
+import { todayRangeInZone } from "@/lib/time/zoned";
 
 export async function getDashboard() {
-  const { workspaceId } = await requireUser();
+  const { workspaceId, workspace } = await requireUser();
 
   const now = new Date();
 
-  const todayStart = new Date(now);
-  todayStart.setHours(0, 0, 0, 0);
-
-  const tomorrow = new Date(todayStart);
-  tomorrow.setDate(tomorrow.getDate() + 1);
+  // "Today" is the workspace's calendar day, not the server's. Previously
+  // setHours(0,0,0,0) used the host timezone, so the dashboard showed the
+  // wrong day's follow-ups whenever the host was not in the user's zone.
+  const { start: todayStart, end: tomorrow } = todayRangeInZone(
+    workspace.timezone,
+    now,
+  );
 
   const [
     totalLeads,
@@ -134,6 +137,8 @@ export async function getDashboard() {
   ]);
 
   return {
+    timezone: workspace.timezone,
+
     metrics: {
       totalLeads,
       qualified,

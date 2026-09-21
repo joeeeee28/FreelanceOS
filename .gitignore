@@ -48,3 +48,6 @@ coverage/
 Thumbs.db
 *.swp
 .idea/
+
+# Generated Prisma Client used by the test suite (rebuilt by `npm test`)
+tests/.generated/

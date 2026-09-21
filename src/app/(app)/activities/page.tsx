@@ -1,8 +1,9 @@
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/auth/require-user";
+import { formatDateTimeInZone } from "@/lib/time/zoned";
 
 export default async function ActivitiesPage() {
-  const { workspaceId } = await requireUser();
+  const { workspaceId, workspace } = await requireUser();
 
   const activities = await db.activity.findMany({
     where: { workspaceId },
@@ -41,7 +42,7 @@ export default async function ActivitiesPage() {
                 {activity.lead?.companyName
                   ? `${activity.lead.companyName} · `
                   : ""}
-                {activity.createdAt.toLocaleString()}
+                {formatDateTimeInZone(activity.createdAt, workspace.timezone)}
               </p>
             </article>
           ))

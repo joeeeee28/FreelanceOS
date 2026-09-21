@@ -14,6 +14,8 @@ const eslintConfig = [
       ".next/**",
       "next-env.d.ts",
       "prisma/migrations/**",
+      // Prisma Client generated for the test suite; not hand-written source.
+      "tests/.generated/**",
     ],
   },
   ...compat.extends("next/core-web-vitals", "next/typescript"),

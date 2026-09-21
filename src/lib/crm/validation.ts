@@ -10,17 +10,38 @@ const optionalEmail = z
   .string()
   .trim()
   .toLowerCase()
-  .email()
+  .email("Enter a valid email address.")
   .optional();
 
+const URL_MESSAGE =
+  "Enter a valid URL beginning with http:// or https://";
+
+/**
+ * A single check (rather than `.url().refine(...)`) so exactly one message is
+ * reported per field. `z.string().url()` alone would accept schemes such as
+ * `javascript:`, so the protocol is restricted explicitly.
+ */
 const optionalUrl = z
   .string()
   .trim()
-  .url()
+  .superRefine((value, ctx) => {
+    let parsed: URL;
+
+    try {
+      parsed = new URL(value);
+    } catch {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: URL_MESSAGE });
+      return;
+    }
+
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: URL_MESSAGE });
+    }
+  })
   .optional();
 
 export const leadSchema = z.object({
-  companyName: text(200).min(1),
+  companyName: text(200).min(1, "Company name is required."),
   contactName: optionalText(200),
 
   status: z.enum([

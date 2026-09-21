@@ -1,38 +1,35 @@
 import Link from "next/link";
 
-const links = [
-  ["Dashboard", "/dashboard"],
-  ["Leads", "/leads"],
-  ["Pipeline", "/pipeline"],
-  ["Contacts", "/contacts"],
-  ["Activities", "/activities"],
-  ["Follow-ups", "/follow-ups"],
-  ["Tasks", "/tasks"],
-];
+import { NavLinks } from "./nav-links";
+import { ThemeToggle } from "./theme-toggle";
+import { UserMenu } from "./user-menu";
 
-export function AppSidebar() {
+export function AppSidebar({
+  userName,
+  userEmail,
+  workspaceName,
+}: {
+  userName: string;
+  userEmail: string;
+  workspaceName: string;
+}) {
   return (
-    <aside className="border-b bg-background md:fixed md:inset-y-0 md:w-64 md:border-r">
+    <aside className="border-b bg-background md:fixed md:inset-y-0 md:flex md:w-64 md:flex-col md:border-r">
       <div className="p-5">
-        <Link
-          href="/dashboard"
-          className="text-xl font-bold"
-        >
+        <Link href="/dashboard" className="text-xl font-bold">
           FreelanceOS
         </Link>
+        <p className="mt-1 truncate text-xs text-muted-foreground" title={workspaceName}>
+          {workspaceName}
+        </p>
       </div>
 
-      <nav className="flex overflow-x-auto p-3 md:block">
-        {links.map(([label, href]) => (
-          <Link
-            key={href}
-            href={href}
-            className="block whitespace-nowrap rounded-md px-3 py-2 text-sm hover:bg-muted"
-          >
-            {label}
-          </Link>
-        ))}
-      </nav>
+      <NavLinks />
+
+      <div className="space-y-3 border-t p-3 md:mt-auto">
+        <ThemeToggle />
+        <UserMenu userName={userName} userEmail={userEmail} />
+      </div>
     </aside>
   );
 }

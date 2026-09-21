@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { getDashboard } from "@/lib/crm/dashboard";
+import { formatDateTimeInZone, formatInZone } from "@/lib/time/zoned";
 
 export default async function DashboardPage() {
   const data = await getDashboard();
@@ -24,6 +25,12 @@ export default async function DashboardPage() {
         <p className="mt-2 text-muted-foreground">
           Focus on the actions most likely to move your
           freelance pipeline forward.
+        </p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          {formatInZone(new Date(), data.timezone, {
+            dateStyle: "full",
+          })}{" "}
+          · {data.timezone}
         </p>
       </div>
 
@@ -62,7 +69,10 @@ export default async function DashboardPage() {
               href={`/leads/${item.leadId}`}
               className="block rounded-xl border p-4 hover:bg-muted"
             >
-              Follow up with {item.lead.companyName}
+              <span>Follow up with {item.lead.companyName}</span>
+              <span className="ml-2 text-sm text-muted-foreground">
+                {formatDateTimeInZone(item.scheduledAt, data.timezone)}
+              </span>
             </Link>
           ))}
 
@@ -72,7 +82,12 @@ export default async function DashboardPage() {
               href="/tasks"
               className="block rounded-xl border p-4 hover:bg-muted"
             >
-              Overdue: {task.title}
+              <span>Overdue: {task.title}</span>
+              {task.dueAt ? (
+                <span className="ml-2 text-sm text-muted-foreground">
+                  was due {formatDateTimeInZone(task.dueAt, data.timezone)}
+                </span>
+              ) : null}
             </Link>
           ))}
         </div>

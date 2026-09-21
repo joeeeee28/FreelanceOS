@@ -50,6 +50,22 @@ Every CRM query is scoped to a workspace. `workspaceId` and `userId` are always
 derived server-side from the authenticated session via `requireUser()` — they
 are never accepted from the browser.
 
+**Sessions.** The browser holds a signed JWT in an HTTP-only, SameSite=Lax
+cookie (`secure` in production). The database stores only the **SHA-256 digest**
+of that token in `Session.tokenHash`, never the token itself, so a read-only
+disclosure of the table (leaked backup, replica, log) yields no usable
+credentials. Authentication verifies the JWT signature, hashes the presented
+token, looks the session up by digest, then compares digests in constant time
+and checks expiry. Raw tokens, JWTs, cookies, passwords and authorization
+headers are never logged.
+
+**Environment.** `src/lib/env.ts` validates configuration on first use at
+runtime, not at import. The production build therefore needs no live database
+or secrets, while a misconfigured server still fails immediately and loudly.
+
+**Errors.** `error.tsx` boundaries render a reference code only — never a
+message, stack trace, SQL fragment or session detail.
+
 ---
 
 ## Local setup
@@ -126,6 +142,22 @@ characters with upper case, lower case, a digit and a symbol.
 | `npm run prisma:generate` | Regenerate the Prisma client                  |
 | `npm run prisma:validate` | Validate `schema.prisma`                      |
 | `npm run prisma:migrate`  | Create/apply a development migration          |
+| `npm test`                | Run the security + unit test suite (Vitest)   |
+| `npm run test:watch`      | Vitest in watch mode                          |
+| `npm run test:generate`   | Regenerate the test-only Prisma client        |
+
+### Tests
+
+`npm test` runs Vitest against a **disposable local PostgreSQL** database. It
+drops and recreates the `public` schema and replays every committed migration,
+so it must never point at production or Supabase — the helper refuses any
+non-local host. Override the target with `TEST_DATABASE_URL`; it defaults to
+`postgresql://devuser:devpass@127.0.0.1:55432/freelanceos_dev`.
+
+The suite covers session-token hashing, session validation (invalid, tampered,
+expired, deleted, logged-out), workspace isolation between two users, setup
+input validation, lead URL/email validation, logout invalidation, and
+timezone-aware date maths including DST transitions.
 
 `scripts/setup-rollback-test.mjs` verifies that a failed setup transaction rolls
 back completely. It writes to the database and asserts an empty starting state,
