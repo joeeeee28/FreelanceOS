@@ -74,6 +74,11 @@ export interface FetchedDocument {
   outcome: FetchOutcome;
   statusCode?: number;
   contentType?: string | null;
+  /**
+   * Lower-cased response headers, when the transport captured them. Kept
+   * optional because a fake fetcher in a test has no reason to invent them.
+   */
+  headers?: Record<string, string>;
   body?: string;
   error?: string;
   durationMs?: number;

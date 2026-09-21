@@ -19,6 +19,15 @@ export interface FixtureRoute {
   delayMs?: number;
 }
 
+/**
+ * A route that computes its response per request.
+ *
+ * Needed for behaviour that depends on call order — an endpoint that fails
+ * twice and then recovers, for instance — which a static fixture cannot
+ * express.
+ */
+export type DynamicRoute = () => FixtureRoute | Promise<FixtureRoute>;
+
 export interface FixtureServer {
   url: string;
   /** Number of requests received per path, to assert on politeness. */
@@ -27,35 +36,48 @@ export interface FixtureServer {
 }
 
 export async function startFixtureServer(
-  routes: Record<string, FixtureRoute>,
+  routes: Record<string, FixtureRoute | DynamicRoute>,
 ): Promise<FixtureServer> {
   const hits = new Map<string, number>();
 
   const server: Server = createServer((req, res) => {
-    const path = (req.url ?? "/").split("#")[0];
+    // Query strings must not split the hit count for one path, but they also
+    // must not be matched against literally.
+    const path = (req.url ?? "/").split("#")[0].split("?")[0];
     hits.set(path, (hits.get(path) ?? 0) + 1);
 
-    const route = routes[path];
+    const defined = routes[path];
 
-    if (route === undefined) {
+    if (defined === undefined) {
       res.writeHead(404, { "content-type": "text/plain" });
       res.end("Not Found");
       return;
     }
 
-    const send = () => {
-      res.writeHead(route.status ?? 200, {
-        "content-type": route.contentType ?? "text/html; charset=utf-8",
-        ...route.headers,
-      });
-      res.end(route.body ?? "");
-    };
+    void (async () => {
+      let route: FixtureRoute;
+      try {
+        route = typeof defined === "function" ? await defined() : defined;
+      } catch {
+        res.writeHead(500, { "content-type": "text/plain" });
+        res.end("Fixture route threw");
+        return;
+      }
 
-    if (route.delayMs !== undefined && route.delayMs > 0) {
-      setTimeout(send, route.delayMs);
-    } else {
-      send();
-    }
+      const send = () => {
+        res.writeHead(route.status ?? 200, {
+          "content-type": route.contentType ?? "text/html; charset=utf-8",
+          ...route.headers,
+        });
+        res.end(route.body ?? "");
+      };
+
+      if (route.delayMs !== undefined && route.delayMs > 0) {
+        setTimeout(send, route.delayMs);
+      } else {
+        send();
+      }
+    })();
   });
 
   await new Promise<void>((resolve) => {

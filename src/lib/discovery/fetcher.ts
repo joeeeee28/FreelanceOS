@@ -54,6 +54,15 @@ export interface HttpFetcherOptions {
 const defaultSleep = (ms: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+/** Response headers as a plain lower-cased record. */
+function collectHeaders(response: Response): Record<string, string> {
+  const headers: Record<string, string> = {};
+  response.headers.forEach((value, key) => {
+    headers[key.toLowerCase()] = value;
+  });
+  return headers;
+}
+
 function originOf(url: string): string | null {
   try {
     return new URL(url).origin;
@@ -239,6 +248,9 @@ export class HttpFetcher implements Fetcher {
             url: current,
             outcome,
             statusCode: status,
+            // Carried so the retry layer can honour Retry-After on a 429 or
+            // a 503 instead of applying its own, blinder, backoff.
+            headers: collectHeaders(response),
             durationMs: this.now() - started,
             error: `HTTP ${status}`,
           };
@@ -251,6 +263,7 @@ export class HttpFetcher implements Fetcher {
           outcome: "SUCCESS",
           statusCode: status,
           contentType: response.headers.get("content-type"),
+          headers: collectHeaders(response),
           body,
           durationMs: this.now() - started,
         };

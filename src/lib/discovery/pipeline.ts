@@ -4,6 +4,8 @@ import type { FetchOutcome as PrismaFetchOutcome, Prisma } from "@prisma/client"
 
 import { db } from "@/lib/db";
 
+import { CachingFetcher } from "./crawl/cache";
+import { RetryingFetcher } from "./crawl/retry";
 import { HttpFetcher } from "./fetcher";
 import { ingestDiscoveredEntity, type IngestResult } from "./ingest";
 import {
@@ -148,10 +150,26 @@ export async function runSource(
     return { ...base, error: `Unknown provider "${source.provider}"` };
   }
 
-  const fetcher = new LoggingFetcher(
-    options.fetcher ?? new HttpFetcher({ minIntervalMs: throttleFor(source.requestsPerMinute) }),
-    workspaceId,
-    sourceId,
+  // The fetch stack, outermost first:
+  //
+  //   Caching   — one fetch per URL per run, and concurrent callers share it
+  //   Logging   — every attempt recorded against the source for health
+  //   Retrying  — transient failures re-attempted with jittered backoff
+  //   Http      — robots, throttling, timeouts, size caps, redirect safety
+  //
+  // Retry sits *inside* logging on purpose: each individual attempt is
+  // logged, so source health reflects what actually hit the network rather
+  // than a retried failure masquerading as one request. Caching sits outside
+  // logging so a cache hit is not recorded as a second request, which would
+  // inflate the success rate.
+  const transport =
+    options.fetcher ??
+    new RetryingFetcher(
+      new HttpFetcher({ minIntervalMs: throttleFor(source.requestsPerMinute) }),
+    );
+
+  const fetcher = new CachingFetcher(
+    new LoggingFetcher(transport, workspaceId, sourceId),
   );
 
   const context: DiscoveryContext = {
