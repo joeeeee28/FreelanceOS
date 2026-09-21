@@ -19,6 +19,17 @@ const eslintConfig = [
     ],
   },
   ...compat.extends("next/core-web-vitals", "next/typescript"),
+  {
+    rules: {
+      // React `useActionState` actions must accept the previous state as their
+      // first parameter even when they do not read it. The leading-underscore
+      // convention marks those deliberately unused parameters.
+      "@typescript-eslint/no-unused-vars": [
+        "warn",
+        { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
+      ],
+    },
+  },
 ];
 
 export default eslintConfig;

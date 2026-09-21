@@ -69,11 +69,13 @@ describe("workspace isolation", () => {
   it("lists only the caller's own leads", async () => {
     actAs(alice);
     const own = await listLeads();
-    expect(own.map((lead) => lead.id)).toEqual([aliceLeadId]);
+    expect(own.items.map((lead) => lead.id)).toEqual([aliceLeadId]);
+    expect(own.total).toBe(1);
 
     actAs(bob);
     const other = await listLeads();
-    expect(other).toHaveLength(0);
+    expect(other.items).toHaveLength(0);
+    expect(other.total).toBe(0);
   });
 
   it("does not return another workspace's lead by direct id", async () => {
@@ -86,9 +88,11 @@ describe("workspace isolation", () => {
   it("does not allow updating another workspace's lead", async () => {
     actAs(bob);
 
+    // The service reports a safe "not found" (it must not reveal that the
+    // record exists in someone else's workspace).
     await expect(
       updateLead(aliceLeadId, { companyName: "Hijacked" }),
-    ).rejects.toThrow("NOT_FOUND");
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
 
     const untouched = await db.lead.findUniqueOrThrow({ where: { id: aliceLeadId } });
     expect(untouched.companyName).toBe("Alice Client Ltd");
@@ -97,7 +101,9 @@ describe("workspace isolation", () => {
   it("does not allow deleting another workspace's lead", async () => {
     actAs(bob);
 
-    await expect(deleteLead(aliceLeadId)).rejects.toThrow("NOT_FOUND");
+    await expect(deleteLead(aliceLeadId)).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
 
     const untouched = await db.lead.findUniqueOrThrow({ where: { id: aliceLeadId } });
     expect(untouched.deletedAt).toBeNull();
@@ -108,12 +114,23 @@ describe("workspace isolation", () => {
 
     const { createLead } = await import("@/lib/crm/leads");
 
-    // A hostile client tries to plant a record in Alice's workspace.
-    const created = await createLead({
-      companyName: "Injected Co",
-      workspaceId: alice.workspaceId,
-    });
+    // A hostile client tries to plant a record in Alice's workspace. The
+    // input schema is strict, so the extra key is rejected outright rather
+    // than silently ignored.
+    await expect(
+      createLead({
+        companyName: "Injected Co",
+        workspaceId: alice.workspaceId,
+      }),
+    ).rejects.toThrow();
 
+    // Nothing was written anywhere.
+    expect(
+      await db.lead.count({ where: { companyName: "Injected Co" } }),
+    ).toBe(0);
+
+    // The same lead without the injected key lands in Bob's own workspace.
+    const created = await createLead({ companyName: "Bob Client Co" });
     expect(created.workspaceId).toBe(bob.workspaceId);
     expect(created.workspaceId).not.toBe(alice.workspaceId);
   });

@@ -1,156 +1,100 @@
 import "server-only";
+import type { LeadStatus } from "@prisma/client";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/auth/require-user";
 import { todayRangeInZone } from "@/lib/time/zoned";
+import { getDailyActions } from "./daily-actions";
 
+/**
+ * Dashboard figures.
+ *
+ * Counts are produced by database aggregates (`count`/`groupBy`) rather than
+ * loading rows into JavaScript, so the dashboard cost does not grow with the
+ * size of the workspace.
+ */
 export async function getDashboard() {
   const { workspaceId, workspace } = await requireUser();
 
   const now = new Date();
 
-  // "Today" is the workspace's calendar day, not the server's. Previously
-  // setHours(0,0,0,0) used the host timezone, so the dashboard showed the
-  // wrong day's follow-ups whenever the host was not in the user's zone.
+  // "Today" is the workspace's calendar day, not the server's.
   const { start: todayStart, end: tomorrow } = todayRangeInZone(
     workspace.timezone,
     now,
   );
 
+  const activeStatuses: LeadStatus[] = [
+    "QUALIFIED",
+    "OUTREACH_READY",
+    "CONTACTED",
+    "RESPONDED",
+    "DISCOVERY_CALL",
+    "PROPOSAL",
+    "NEGOTIATION",
+  ];
+
   const [
+    statusCounts,
     totalLeads,
-    qualified,
-    active,
     followUpsDue,
-    discoveryCalls,
-    proposals,
-    won,
-    lost,
-    todaysFollowUps,
-    overdueTasks,
-    recentLeads,
+    overdueFollowUps,
+    openTasks,
+    scoreStats,
+    actions,
   ] = await Promise.all([
-    db.lead.count({
+    // One grouped query replaces the eight separate count queries this used
+    // to run.
+    db.lead.groupBy({
+      by: ["status"],
       where: { workspaceId, deletedAt: null },
+      _count: { _all: true },
     }),
-
-    db.lead.count({
-      where: {
-        workspaceId,
-        deletedAt: null,
-        status: "QUALIFIED",
-      },
-    }),
-
-    db.lead.count({
-      where: {
-        workspaceId,
-        deletedAt: null,
-        status: {
-          in: [
-            "QUALIFIED",
-            "OUTREACH_READY",
-            "CONTACTED",
-            "RESPONDED",
-            "DISCOVERY_CALL",
-            "PROPOSAL",
-            "NEGOTIATION",
-          ],
-        },
-      },
-    }),
-
+    db.lead.count({ where: { workspaceId, deletedAt: null } }),
     db.followUp.count({
-      where: {
-        workspaceId,
-        status: "SCHEDULED",
-        scheduledAt: { lt: tomorrow },
-      },
+      where: { workspaceId, status: "SCHEDULED", scheduledAt: { lt: tomorrow } },
     }),
-
-    db.lead.count({
-      where: {
-        workspaceId,
-        deletedAt: null,
-        status: "DISCOVERY_CALL",
-      },
+    db.followUp.count({
+      where: { workspaceId, status: "SCHEDULED", scheduledAt: { lt: todayStart } },
     }),
-
-    db.lead.count({
-      where: {
-        workspaceId,
-        deletedAt: null,
-        status: "PROPOSAL",
-      },
+    db.task.count({
+      where: { workspaceId, status: { in: ["TODO", "IN_PROGRESS"] } },
     }),
-
-    db.lead.count({
-      where: {
-        workspaceId,
-        deletedAt: null,
-        status: "WON",
-      },
+    db.lead.aggregate({
+      where: { workspaceId, deletedAt: null },
+      _avg: { score: true },
+      _max: { score: true },
     }),
-
-    db.lead.count({
-      where: {
-        workspaceId,
-        deletedAt: null,
-        status: "LOST",
-      },
-    }),
-
-    db.followUp.findMany({
-      where: {
-        workspaceId,
-        status: "SCHEDULED",
-        scheduledAt: {
-          gte: todayStart,
-          lt: tomorrow,
-        },
-      },
-      include: { lead: true },
-      orderBy: { scheduledAt: "asc" },
-    }),
-
-    db.task.findMany({
-      where: {
-        workspaceId,
-        status: {
-          in: ["TODO", "IN_PROGRESS"],
-        },
-        dueAt: {
-          lt: now,
-        },
-      },
-      include: { lead: true },
-      orderBy: { dueAt: "asc" },
-    }),
-
-    db.lead.findMany({
-      where: {
-        workspaceId,
-        deletedAt: null,
-      },
-      orderBy: { updatedAt: "desc" },
-      take: 5,
-    }),
+    getDailyActions(now),
   ]);
+
+  const byStatus = new Map<LeadStatus, number>(
+    statusCounts.map((row) => [row.status, row._count._all]),
+  );
+
+  const countOf = (status: LeadStatus) => byStatus.get(status) ?? 0;
 
   return {
     timezone: workspace.timezone,
 
     metrics: {
       totalLeads,
-      qualified,
-      active,
+      qualified: countOf("QUALIFIED"),
+      active: activeStatuses.reduce(
+        (total, status) => total + countOf(status),
+        0,
+      ),
       followUpsDue,
-      discoveryCalls,
-      proposals,
-      won,
-      lost,
+      overdueFollowUps,
+      discoveryCalls: countOf("DISCOVERY_CALL"),
+      proposals: countOf("PROPOSAL"),
+      negotiation: countOf("NEGOTIATION"),
+      won: countOf("WON"),
+      lost: countOf("LOST"),
+      openTasks,
+      averageScore: Math.round(scoreStats._avg.score ?? 0),
+      topScore: scoreStats._max.score ?? 0,
     },
-    todaysFollowUps,
-    overdueTasks,
-    recentLeads,
+
+    actions,
   };
 }

@@ -189,13 +189,102 @@ Set the Render Node version to 20 to match `.nvmrc`.
 
 ---
 
+## CRM workflow
+
+The app covers one loop end to end: **lead → research → qualification →
+scoring → contact → outreach → follow-up → discovery call → proposal stage**.
+
+Every mutation follows the same path:
+
+```
+UI form → server action → requireUser() → CRM service → Prisma transaction → Activity
+```
+
+Business rules live in `src/lib/crm/`, never in React components. The client
+never supplies `workspaceId`, `createdByUserId` or `score`; the input schemas
+are `.strict()`, so a request carrying one of those keys is rejected outright
+rather than silently ignored.
+
+### Lead scoring
+
+`src/lib/crm/scoring.ts` is deterministic, explainable and bounded to 0–100.
+There is no AI and no randomness: the same lead always produces the same score,
+and every point awarded carries a reason code shown on the lead page.
+
+| Signal | Points |
+| --- | --- |
+| Decision maker identified | 20 |
+| Service interest captured | 15 |
+| Pain point identified | 15 |
+| No website (high need) | 12 |
+| Weak website | 8 |
+| Advertising actively | 10 |
+| Publishing content | 5 |
+| Qualification notes written | 5 |
+| Reachable (email or phone) | 8 |
+| Firmographics known | 2 |
+
+Pipeline position adds further points (NEW 0 → PROPOSAL/NEGOTIATION 20). The
+raw total is clamped to 100; a lead with no research scores 0. Scores are
+recalculated server-side whenever qualification, the decision maker or the
+status changes.
+
+### Daily revenue engine
+
+`src/lib/crm/daily-actions.ts` answers "what should I do today to generate
+revenue?" from real rows only — an empty database produces an empty list, never
+invented suggestions. Actions are ranked by priority
+(URGENT → HIGH → MEDIUM → LOW), then by category, then by due date:
+
+1. `OVERDUE_FOLLOW_UP` — a commitment already missed
+2. `DISCOVERY_CALL_TODAY`
+3. `FOLLOW_UP_DUE_TODAY`
+4. `RESPONDED_LEAD_NEEDS_ACTION` — replied, nothing booked
+5. `PROPOSAL_STAGE_FOLLOW_UP`
+6. `OVERDUE_TASK`
+7. `HIGH_SCORE_UNCONTACTED_LEAD` (score ≥ 50)
+8. `NEW_QUALIFIED_LEAD`
+
+"Today" is always the **workspace** calendar day, resolved through the
+timezone helpers in `src/lib/time/`, never the server's local date.
+
+### Pipeline transitions
+
+All twelve statuses are reachable, but only through the validated map in
+`src/lib/crm/pipeline.ts`:
+
+```
+NEW → RESEARCHING → QUALIFIED → OUTREACH_READY → CONTACTED
+    → RESPONDED → DISCOVERY_CALL → PROPOSAL → NEGOTIATION → WON
+```
+
+`NURTURE` and `LOST` are reachable from any active stage and can re-enter the
+pipeline; `WON` is terminal. Every accepted move writes a `STATUS_CHANGED`
+activity carrying the old and new status, inside the same transaction as the
+update.
+
+### Archiving
+
+Leads are soft-deleted with `deletedAt` plus an activity entry. Archived leads
+disappear from active lists but remain reachable through the "Archived only"
+filter and can be restored.
+
+### Lists
+
+Search (company, contact, email, website), status/source/score/archive filters
+and pagination all run in SQL. Page size defaults to 25 and is hard-capped at
+100, so no request can pull an unbounded result set.
+
+---
+
 ## Project status
 
-Phase 1 (bootstrap, authentication, workspace) and the Phase 2 read paths
-(dashboard, leads, contacts, activities, tasks, follow-ups, pipeline) are
-implemented. Lead creation is wired end to end.
+Phases 1 and 2 are complete: bootstrap, authentication and workspace setup,
+plus the full CRM workflow described above — leads, qualification, scoring,
+contacts, tasks, follow-ups, the interactive pipeline, activity timelines and
+the daily revenue engine, all wired to forms and covered by tests.
 
-Several Phase 2 write paths — editing leads, moving pipeline stages, and
-creating contacts, tasks and follow-ups from the UI — have service-layer
-implementations in `src/lib/crm/` that are not yet connected to forms. Money and
-revenue tracking are not part of the current data model.
+Not implemented, and deliberately out of scope for now: external lead discovery
+(no scraping, no third-party lead APIs), AI enrichment or AI scoring, outreach
+automation, and anything involving money — proposals, invoices, payments and
+revenue reporting are absent from the data model.
