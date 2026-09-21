@@ -15,6 +15,7 @@
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",
     "prisma:migrate": "prisma migrate dev",
+    "prisma:parity": "node scripts/verify-migration-parity.mjs",
     "test": "npm run test:generate && vitest run",
     "test:watch": "vitest",
     "test:generate": "node scripts/generate-test-client.mjs"
