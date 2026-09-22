@@ -36,7 +36,7 @@ function ctx(config: Record<string, unknown>, fixture?: FixtureServer) {
     workspaceId: "ws_test",
     sourceId: null,
     config,
-    fetcher: new HttpFetcher({ minIntervalMs: 0 }),
+    fetcher: new HttpFetcher({ minIntervalMs: 0, allowLoopback: true }),
     now: new Date("2026-09-22T00:00:00Z"),
     fixture,
   };
@@ -515,7 +515,7 @@ describe("every provider degrades safely", () => {
           feedUrls: [dead],
           careerPageUrls: [dead],
         },
-        fetcher: new HttpFetcher({ minIntervalMs: 0, timeoutMs: 400 }),
+        fetcher: new HttpFetcher({ minIntervalMs: 0, timeoutMs: 400, allowLoopback: true }),
         now: new Date(),
       });
 

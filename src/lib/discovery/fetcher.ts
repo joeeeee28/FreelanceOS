@@ -21,6 +21,7 @@ import {
   type FetchedDocument,
   type Fetcher,
 } from "./provider";
+import { checkTarget, describeBlock } from "./net-guard";
 import {
   crawlDelayFor,
   isAllowed,
@@ -46,6 +47,11 @@ export interface HttpFetcherOptions {
   minIntervalMs?: number;
   /** Set false only for a local fixture server in tests. */
   respectRobots?: boolean;
+  /**
+   * Permit loopback targets. Test-only: the fixture server runs on 127.0.0.1.
+   * Defaults to false so the SSRF guard is on by default everywhere else.
+   */
+  allowLoopback?: boolean;
   fetchImpl?: typeof fetch;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
@@ -84,6 +90,8 @@ export class HttpFetcher implements Fetcher {
   private readonly maxBytes: number;
   private readonly minIntervalMs: number;
   private readonly respectRobots: boolean;
+  /** Test-only; see net-guard. Never set by application code. */
+  private readonly allowLoopback: boolean;
   private readonly fetchImpl: typeof fetch;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly now: () => number;
@@ -97,6 +105,7 @@ export class HttpFetcher implements Fetcher {
     this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
     this.minIntervalMs = options.minIntervalMs ?? DEFAULT_MIN_INTERVAL_MS;
     this.respectRobots = options.respectRobots ?? true;
+    this.allowLoopback = options.allowLoopback ?? false;
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
     this.sleep = options.sleep ?? defaultSleep;
     this.now = options.now ?? (() => Date.now());
@@ -112,11 +121,13 @@ export class HttpFetcher implements Fetcher {
       return { url, outcome: "NETWORK_ERROR", error: "Invalid URL" };
     }
 
-    // Only http(s). Anything else (file:, data:) is not a web resource and
-    // could be an attempt to read the local filesystem.
-    const scheme = new URL(url).protocol;
-    if (scheme !== "http:" && scheme !== "https:") {
-      return { url, outcome: "NETWORK_ERROR", error: `Unsupported scheme ${scheme}` };
+    // Deny-by-default on the target address. URLs reaching this point came
+    // from untrusted remote content, so an unguarded fetch would turn the
+    // crawler into an SSRF primitive pointed at our own private network.
+    // Refusal is recorded as BLOCKED: it is a policy decision, never retried.
+    const guard = checkTarget(url, { allowLoopback: this.allowLoopback });
+    if (!guard.allowed) {
+      return { url, outcome: "BLOCKED", error: describeBlock(guard) };
     }
 
     if (this.respectRobots) {
@@ -220,6 +231,22 @@ export class HttpFetcher implements Fetcher {
           }
 
           const next = new URL(location, current).toString();
+
+          // A redirect is a remote party choosing our next URL, so the target
+          // guard must run again on every hop. Checking only the first URL
+          // would let any public host redirect us straight to 127.0.0.1.
+          const hopGuard = checkTarget(next, {
+            allowLoopback: this.allowLoopback,
+          });
+          if (!hopGuard.allowed) {
+            return {
+              url: next,
+              outcome: "BLOCKED",
+              statusCode: status,
+              error: `Redirect ${describeBlock(hopGuard).toLowerCase()}`,
+              durationMs: this.now() - started,
+            };
+          }
 
           if (this.respectRobots) {
             const nextOrigin = originOf(next);

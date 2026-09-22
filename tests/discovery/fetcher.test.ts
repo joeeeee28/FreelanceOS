@@ -16,8 +16,14 @@ afterEach(async () => {
   server = null;
 });
 
-/** No artificial delay between requests, so tests stay fast. */
-const fast = { minIntervalMs: 0 };
+/**
+ * No artificial delay between requests, so tests stay fast.
+ *
+ * `allowLoopback` is required because the fixture server runs on 127.0.0.1 and
+ * the SSRF guard blocks loopback by default. Opting in here keeps the guard on
+ * for every other caller.
+ */
+const fast = { minIntervalMs: 0, allowLoopback: true };
 
 describe("HttpFetcher", () => {
   it("fetches an allowed page", async () => {
@@ -175,8 +181,11 @@ describe("HttpFetcher", () => {
     const fetcher = new HttpFetcher(fast);
 
     const result = await fetcher.fetch("file:///etc/passwd");
-    expect(result.outcome).toBe("NETWORK_ERROR");
-    expect(result.error).toContain("Unsupported scheme");
+    // BLOCKED, not NETWORK_ERROR: refusing a scheme is a policy decision, and
+    // BLOCKED is the outcome the engine never retries. Classifying it as a
+    // network error would imply the attempt might succeed later.
+    expect(result.outcome).toBe("BLOCKED");
+    expect(result.error).toContain("unsupported scheme");
   });
 
   it("reports an unreachable host as a network error rather than throwing", async () => {
@@ -215,6 +224,7 @@ describe("HttpFetcher", () => {
     let clock = 0;
 
     const fetcher = new HttpFetcher({
+      allowLoopback: true,
       minIntervalMs: 1000,
       now: () => clock,
       sleep: async (ms) => {
@@ -244,6 +254,7 @@ describe("HttpFetcher", () => {
     let clock = 0;
 
     const fetcher = new HttpFetcher({
+      allowLoopback: true,
       minIntervalMs: 10,
       now: () => clock,
       sleep: async (ms) => {

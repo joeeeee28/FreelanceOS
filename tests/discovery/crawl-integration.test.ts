@@ -54,6 +54,7 @@ function stack(options: { timeoutMs?: number; maxAttempts?: number } = {}) {
   return new CachingFetcher(
     new RetryingFetcher(
       new HttpFetcher({
+        allowLoopback: true,
         minIntervalMs: 0,
         timeoutMs: options.timeoutMs ?? 5_000,
       }),

@@ -30,7 +30,7 @@ function contextFor(server: FixtureServer, config: Record<string, unknown>) {
     workspaceId: "ws_test",
     sourceId: null,
     config,
-    fetcher: new HttpFetcher({ minIntervalMs: 0 }),
+    fetcher: new HttpFetcher({ minIntervalMs: 0, allowLoopback: true }),
     now: new Date("2026-09-22T00:00:00Z"),
   };
 }
@@ -233,7 +233,7 @@ describe("websiteProvider", () => {
       workspaceId: "ws_test",
       sourceId: null,
       config: { urls: ["http://127.0.0.1:1"] },
-      fetcher: new HttpFetcher({ minIntervalMs: 0, timeoutMs: 500 }),
+      fetcher: new HttpFetcher({ minIntervalMs: 0, timeoutMs: 500, allowLoopback: true }),
       now: new Date(),
     };
 
@@ -251,7 +251,7 @@ describe("websiteProvider", () => {
       workspaceId: "ws_test",
       sourceId: null,
       config: { urls: ["", "   ", "javascript:alert(1)", "mailto:a@b.com"] },
-      fetcher: new HttpFetcher({ minIntervalMs: 0 }),
+      fetcher: new HttpFetcher({ minIntervalMs: 0, allowLoopback: true }),
       now: new Date(),
     };
 

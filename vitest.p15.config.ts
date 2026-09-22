@@ -44,11 +44,7 @@ export default defineConfig({
   test: {
     environment: "node",
     setupFiles: ["./tests/setup.ts"],
-    include: ["tests/**/*.test.ts"],
-    // The P15 suite talks to the real Internet. It is run explicitly via
-    // vitest.p15.config.ts, never as part of the offline suite, so that a
-    // third-party outage can never be mistaken for a regression here.
-    exclude: ["tests/p15/**"],
+    include: ["tests/p15/**/*.test.ts"],
     // Integration tests share one disposable Postgres database, so they must
     // not run concurrently against each other.
     fileParallelism: false,
