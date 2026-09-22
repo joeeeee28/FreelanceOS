@@ -1,9 +1,18 @@
-import "server-only";
+/**
+ * Note: this module intentionally carries no `server-only` marker.
+ *
+ * It is loaded by the standalone worker process as well as by the Next.js
+ * app, and `server-only` throws anywhere outside a React Server Component
+ * graph. The protection is not lost — this module reaches the browser only
+ * via an import from a client component, which would fail to bundle Prisma
+ * regardless. Application UI code must still import `@/lib/db`, which keeps
+ * the guard.
+ */
 
 import { Prisma } from "@prisma/client";
 import type { JobStatus, JobType } from "@prisma/client";
 
-import { db } from "@/lib/db";
+import { db } from "@/lib/db-client";
 
 /**
  * Postgres-backed job queue.

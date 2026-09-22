@@ -18,7 +18,8 @@
     "prisma:parity": "node scripts/verify-migration-parity.mjs",
     "test": "npm run test:generate && vitest run",
     "test:watch": "vitest",
-    "test:generate": "node scripts/generate-test-client.mjs"
+    "test:generate": "node scripts/generate-test-client.mjs",
+    "worker": "tsx src/worker/index.ts"
   },
   "dependencies": {
     "@prisma/client": "6.19.3",
@@ -47,6 +48,7 @@
     "postcss": "8.5.28",
     "prisma": "6.19.3",
     "tailwindcss": "3.4.19",
+    "tsx": "^4.23.15",
     "typescript": "5.9.3",
     "vitest": "^3.2.7"
   }

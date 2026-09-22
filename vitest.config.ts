@@ -8,6 +8,15 @@ export default defineConfig({
     // otherwise "@" wins and the real (binary-engine) client gets loaded.
     alias: [
       {
+        // The discovery engine and the worker import `@/lib/db-client`, the
+        // unguarded client, because `server-only` throws outside a React
+        // Server Component graph. Same substitution as `@/lib/db`.
+        find: /^@\/lib\/db-client$/,
+        replacement: fileURLToPath(
+          new URL("./tests/helpers/test-prisma.ts", import.meta.url),
+        ),
+      },
+      {
         // Application data-access code imports `@/lib/db`. In tests that same
         // code must run against the disposable test database via the driver
         // adapter, so the module is swapped here rather than in the source.

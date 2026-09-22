@@ -26,7 +26,7 @@
 
 import type { Prisma, PrismaClient } from "@prisma/client";
 
-import { db } from "@/lib/db";
+import { db } from "@/lib/db-client";
 import { scoreLead, type ScorableLead } from "@/lib/crm/scoring";
 
 /**

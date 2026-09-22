@@ -1,8 +1,17 @@
-import "server-only";
+/**
+ * Note: this module intentionally carries no `server-only` marker.
+ *
+ * It is loaded by the standalone worker process as well as by the Next.js
+ * app, and `server-only` throws anywhere outside a React Server Component
+ * graph. The protection is not lost — this module reaches the browser only
+ * via an import from a client component, which would fail to bundle Prisma
+ * regardless. Application UI code must still import `@/lib/db`, which keeps
+ * the guard.
+ */
 
 import type { FetchOutcome as PrismaFetchOutcome, Prisma } from "@prisma/client";
 
-import { db } from "@/lib/db";
+import { db } from "@/lib/db-client";
 
 import { CachingFetcher } from "./crawl/cache";
 import { RetryingFetcher } from "./crawl/retry";
@@ -61,6 +70,11 @@ export interface RunSourceResult {
   companiesCreated: number;
   companiesMatched: number;
   needsReview: number;
+  /**
+   * Companies this run created or touched, so the caller can queue follow-up
+   * work for exactly those rather than re-scanning the workspace.
+   */
+  companyIds: string[];
   warnings: string[];
 }
 
@@ -129,6 +143,7 @@ export async function runSource(
     entitiesValid: 0,
     entitiesRejected: 0,
     companiesCreated: 0,
+    companyIds: [],
     companiesMatched: 0,
     needsReview: 0,
     warnings: [],
@@ -233,6 +248,7 @@ export async function runSource(
     if (ingested.kind === "INGESTED") {
       if (ingested.created) result.companiesCreated += 1;
       else result.companiesMatched += 1;
+      result.companyIds.push(ingested.companyId);
     } else if (ingested.kind === "NEEDS_REVIEW") {
       result.needsReview += 1;
       result.companiesCreated += 1;

@@ -10,7 +10,7 @@
 
 import type { Prisma, PrismaClient, SignalType } from "@prisma/client";
 
-import { db } from "@/lib/db";
+import { db } from "@/lib/db-client";
 import {
   detectSignals,
   type CompanyFacts,

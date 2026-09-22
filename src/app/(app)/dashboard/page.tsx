@@ -2,7 +2,14 @@ import { db } from "@/lib/db";
 import { requireUser } from "@/lib/auth/require-user";
 import { getDashboard } from "@/lib/crm/dashboard";
 import { formatInZone } from "@/lib/time/zoned";
-import { Card, CardBody, CardHeader, EmptyState, LinkButton } from "@/components/ui/primitives";
+import {
+  Card,
+  CardBody,
+  CardHeader,
+  EmptyState,
+  LinkButton,
+  SectionHeading,
+} from "@/components/ui/primitives";
 import { Icon } from "@/components/ui/domain";
 import { PageHeader, PageSections } from "@/components/ui/page";
 import { KpiTile } from "@/components/crm/kpi-tile";
@@ -10,6 +17,18 @@ import { ActionCard, actionKey } from "@/components/crm/action-card";
 import { PipelineSnapshot } from "@/components/crm/pipeline-snapshot";
 import { RevenueFunnel } from "@/components/crm/revenue-funnel";
 import { ActivityTimeline } from "@/components/crm/activity-timeline";
+import {
+  DiscoverySummary,
+  MarketPanel,
+  SourceHealthTable,
+  TopOpportunities,
+} from "@/components/crm/discovery-panels";
+import {
+  getDiscoveryStats,
+  getMarketIntelligence,
+  getSourceHealth,
+  getTopOpportunities,
+} from "@/lib/discovery/stats";
 
 /** Time-of-day greeting in the workspace's own timezone, not the server's. */
 function greeting(timezone: string, now: Date): string {
@@ -32,6 +51,15 @@ export default async function DashboardPage() {
   const [{ user, workspaceId }, data] = await Promise.all([
     requireUser(),
     getDashboard(),
+  ]);
+
+  // Discovery panels. Queried in parallel, and each returns real counts or an
+  // explicit "nothing yet" — never a placeholder figure.
+  const [discoveryStats, topOpportunities, sourceHealth, market] = await Promise.all([
+    getDiscoveryStats(workspaceId),
+    getTopOpportunities(workspaceId),
+    getSourceHealth(workspaceId),
+    getMarketIntelligence(workspaceId),
   ]);
 
   // The recent-activity feed reuses the existing Activity table. Ten rows is
@@ -249,6 +277,49 @@ export default async function DashboardPage() {
           </CardBody>
         </Card>
       </div>
+
+      {/* -------------------------------------------------------- discovery */}
+      <section aria-label="Discovery">
+        <SectionHeading
+          title="Discovery"
+          description="What the engine has found for you."
+        />
+        <div className="mt-3">
+          <DiscoverySummary stats={discoveryStats} now={now} />
+        </div>
+      </section>
+
+      <div className="grid gap-4 lg:grid-cols-3">
+        <Card className="lg:col-span-2">
+          <CardHeader
+            title="Best opportunities"
+            description="Scored from observed signals. Every score shows its reason."
+          />
+          <CardBody>
+            <TopOpportunities opportunities={topOpportunities} />
+          </CardBody>
+        </Card>
+
+        <Card>
+          <CardHeader
+            title="Market"
+            description="Aggregates across discovered companies."
+          />
+          <CardBody>
+            <MarketPanel market={market} />
+          </CardBody>
+        </Card>
+      </div>
+
+      <Card>
+        <CardHeader
+          title="Source health"
+          description="Whether each discovery source is working, and what to do if not."
+        />
+        <CardBody>
+          <SourceHealthTable sources={sourceHealth} now={now} />
+        </CardBody>
+      </Card>
 
       {/* -------------------------------------------------- recent activity */}
       <Card>

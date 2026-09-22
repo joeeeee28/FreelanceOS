@@ -14,7 +14,7 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 
 import { canonicalUrl } from "@/lib/discovery/canonical";
-import { db } from "@/lib/db";
+import { db } from "@/lib/db-client";
 import { stripTags } from "@/lib/discovery/extract";
 import {
   buildExcerpt,
