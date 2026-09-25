@@ -1031,3 +1031,201 @@ Only genuine blockers are listed; nothing else is claimed as blocked.
 
 > **FreelanceOS is NOT READY — VALIDATION BLOCKERS REMAIN. Do not deploy.
 > P15.2 stops here; P16 has not begun.**
+
+---
+
+# P15-ENV1 ENVIRONMENT REMEDIATION (2026-09-25 UTC / 2026-09-26 Asia/Kolkata)
+
+> **Scope:** determine whether this environment can be made capable of running
+> the already-built application normally. This phase is an environment
+> assessment: no product feature was added, no application code, schema,
+> dependency or configuration was changed, no architecture was altered, no
+> engine artifact was fabricated or fetched from an untrusted source, no test
+> was weakened, no TypeScript/build error was suppressed, no `npm audit fix
+> --force` was run, nothing was deployed, and production Supabase was never
+> contacted. P16 has not begun.
+>
+> **Phase 1 (state):** branch `arena/01a0da5b-freelanceos`, HEAD `e8830a3`
+> (P15.2 documentation commit), working tree clean, `main` = `origin/main` =
+> `4633905`, `main` is an ancestor of HEAD and HEAD is 0 commits behind. No
+> reset, rebase, force-push or history rewrite. (The checkout arrived depth-1;
+> deepening it earlier with a read-only `git fetch --unshallow` is what made the
+> P15/P15.1 commits visible locally.)
+>
+> **Phase 3 (normal-path validation) was not executed:** its precondition —
+> successful normal Prisma generation — was not met, so the Phase 4 blocked
+> branch applies. No validation was skipped or faked.
+
+## Prisma
+
+Diagnosis of the required artifact host, in order:
+
+| Layer | Result | Detail |
+|---|---|---|
+| DNS | **OK** | `binaries.prisma.sh` resolves via CNAME `r2.prisma.sh.cdn.cloudflare.net` to `172.66.156.100` / `104.20.43.103` (Cloudflare), plus IPv6 `2606:4700:10::ac42:9c64` / `2606:4700:10::6814:2b67` |
+| TCP | **OK** | Ports **443 and 80 both complete the TCP handshake** (`/dev/tcp`, `curl` and `openssl` all report `Connected`) |
+| TLS | **DENIED** | ClientHello is sent, then the peer **resets the connection before ServerHello** — `OpenSSL SSL_connect: SSL_ERROR_SYSCALL`, `unexpected eof while reading`, "no peer certificate available". No certificate is ever presented. Identical on the failover host. |
+| HTTPS | **UNAVAILABLE** | TLS never negotiates, so no HTTPS response exists (`http=000`); plain HTTP/80 returns "empty reply from server" |
+
+**Classification: egress allowlist / Arena sandbox policy** — and specifically
+*not* DNS, *not* TCP, *not* a proxy, *not* an in-guest firewall, and *not* an
+unavailable Prisma service:
+
+- **No proxy is configured or present.** `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`
+  are unset, `npm config get proxy|https-proxy` return `null`, and no apt/wget/
+  profile proxy entries exist. Only three sockets listen in the guest (sshd:22,
+  rpcbind:111, one internal service) — there is no local egress proxy to use.
+- **The restriction is enforced outside the guest.** `sudo` is available
+  (passwordless) and `sudo iptables -S` shows default `ACCEPT` policies with
+  **zero rules**, so there is nothing locally to change. Sandbox identity:
+  `E2B_SANDBOX=true`, `E2B_SANDBOX_ID=iz960tp1sucvrltrqu5dw`,
+  `E2B_TEMPLATE_ID=mn0k6lgvyo6q8utbj8jh`; no platform CLI, config file
+  (`~/.arena` absent) or environment switch exposed inside the guest can modify
+  the policy.
+- **Three egress classes are observable**, which is the signature of an
+  allowlist rather than a broken service: *allowed with a genuine certificate*
+  (`registry.npmjs.org` → Google Trust Services; `pypi.org` /
+  `files.pythonhosted.org` → GlobalSign), *allowed through an intercepting
+  proxy* (`github.com`, `api.github.com`, `codeload.github.com` →
+  `O=E2B, CN=E2B Proxy CA`), and *denied* (TLS reset). The denied set is broad
+  and includes `example.com`, `example.org`, `wikipedia.org`,
+  `deb.debian.org`, `archive.ubuntu.com`, `unpkg.com`, `cdn.jsdelivr.net`,
+  `registry.npmmirror.com`, `storage.googleapis.com`, `raw.githubusercontent.com`
+  and `objects.githubusercontent.com` — so this is not specific to Prisma.
+- **Prisma's artifact service is up; only this sandbox cannot reach it.**
+  Prisma's public release history continues (the GitHub API is reachable and
+  shows current tags), and the engine objects live on a Cloudflare CDN that the
+  sandbox is simply not permitted to talk to.
+
+**Prisma CLI:** `npx prisma --version` → **exit 1** (it too requires the schema
+engine). **generate:** `npx prisma generate` → **exit 1**, no client produced.
+**migration:** `npx prisma migrate deploy` (with a live disposable PostgreSQL
+available and valid `DATABASE_URL`/`DIRECT_URL`) → **exit 1** before touching
+the database. All three fail identically, before any schema/database work:
+
+```text
+Error: request to https://binaries.prisma.sh/all_commits/c2990dca591cba766e3b7ef5d9e8a84796e47ab7/debian-openssl-3.0.x/schema-engine.gz.sha256 failed,
+reason: Client network socket disconnected before secure TLS connection was established
+```
+
+### Was there an officially supported mirror/configuration for this environment?
+
+Every official mechanism the installed Prisma 6.19.3 CLI recognises was checked
+(25 `PRISMA_*` switches were enumerated from the CLI bundle):
+
+| Official mechanism | Available here? | Reason |
+|---|---|---|
+| `PRISMA_ENGINES_MIRROR` | **No usable mirror exists** | The CLI rewrites the artifact base URL but still requests `/all_commits/<hash>/<platform>/<file>`. Pointed at the only reachable artifact host (the npm registry) it produced `Failed to fetch sha256 checksum at https://registry.npmjs.org/all_commits/…/libquery_engine.so.node.sha256 - 404 Not Found`. No reachable host serves that layout, and this environment provides no mirror. |
+| `PRISMA_SCHEMA_ENGINE_BINARY`, `PRISMA_QUERY_ENGINE_LIBRARY`, `PRISMA_MIGRATION_ENGINE_BINARY` | **No** — they supply a binary you must already have | None can be obtained by any trusted reachable channel (see below). |
+| `PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING` | **Rejected** | It only skips checksum verification; it does not supply the artifact, and using it to bypass integrity checking is explicitly out of scope for this phase. |
+| Engine-type configuration (`engineType = "client"` driver adapter, `wasm`, or `--no-engine` + Data Proxy) | **Out of scope** | These are official Prisma features, but they change the application's runtime engine architecture. The driver-adapter path is test-only by repository policy, and Data Proxy is a paid hosted service. An environment phase must not alter product architecture. |
+| Fresh reinstall of the pinned version | **No effect** | A clean `npm i prisma@6.19.3 @prisma/client@6.19.3` in a scratch directory *outside* the repository exits 0 with 36 packages, yet ships **no** engines and leaves `.prisma/client` as the ungenerated placeholder. |
+
+No trusted, reachable source for the native engine exists in this environment:
+
+- `@prisma/engines@6.19.3` from npm is **10 files / 22,666 bytes, all
+  JavaScript** — no `.so`, `.node`, `.gz` or `schema-engine*` artifact.
+- No platform-specific engine package exists on npm
+  (`@prisma/engines-linux-x64`, `@prisma/schema-engine`, `@prisma/query-engine`
+  all return **HTTP 404**).
+- `prisma/prisma-engines` has **0 GitHub releases**; `prisma/prisma` releases
+  exist but carry **no assets** at all; `www.prisma.io/docs` is blocked.
+- Downloading an engine binary from any third-party/arbitrary source is
+  prohibited and was not done; no binary was committed to the repository.
+
+> **PRISMA NORMAL RUNTIME = ENVIRONMENT BLOCKED**
+
+## Application
+
+| Facet | Result | Evidence |
+|---|---|---|
+| Normal Prisma runtime | **BLOCKED** | `src/lib/db-client.ts:21` throws `Error: @prisma/client did not initialize yet. Please run "prisma generate"…`; `node_modules/.prisma/client/index.d.ts` is still the placeholder (`export declare const PrismaClient: any`) |
+| API | **BLOCKED (DB routes)** | Re-checked this phase against the running app and disposable PostgreSQL: `/api/health` → **200**, `/api/init-status` → **500** |
+| Authentication | **BLOCKED** | `/login` renders (**200**, static page) but no login can complete: session issuance and lookup both require the client. No auth code, secret, token format or session policy was touched. |
+| CRM persistence | **BLOCKED — not performed** | The authenticated workflow cannot run on the normal client. Running it through the test adapter would be adapter-backed behaviour, not normal runtime, so it is not claimed here. (CRM/discovery/knowledge behaviour was re-verified only at the clearly labelled test-adapter level in P15.2 — 798 tests / 44 files and 60 live tests — with no change in this phase.) |
+
+The application was **not** modified to bypass Prisma in any way.
+
+## Worker
+
+| Facet | Result | Evidence |
+|---|---|---|
+| Normal Prisma worker | **BLOCKED** | `npm run worker` → **exit 1** at module import (`node_modules/.prisma/client/default.js:43` via `src/lib/db-client.ts:21`), before the run loop, any claim, or the scheduler timer |
+| Job processing | **BLOCKED — not performed** | No job could be enqueued, claimed, processed, retried or recovered through the normal worker; no scheduler or discovery cycle ran. Queue-claiming/retry/recovery semantics remain covered only by the P15.2 test-adapter suites (no duplicate claim, death re-lease, heartbeat, retry-then-fail, crash-lossless), which are not normal-runtime evidence. |
+
+## Browser
+
+| Facet | Result |
+|---|---|
+| Browser availability | **None.** No `chromium`, `chromium-browser`, `google-chrome`, `chrome`, `firefox`, `firefox-esr` or `msedge` on `PATH`; no Playwright/Puppeteer/Selenium package anywhere; no `ms-playwright` cache; a filesystem search found no `chrome`, `chrome-sandbox` or `headless_shell` binary. |
+| Provisioning possibility | **Impossible in this sandbox through any legitimate channel.** Debian package repositories are denied (`deb.debian.org`: connection failed), so Chromium/Firefox cannot be installed via the OS. Every official browser distribution host is denied: `cdn.playwright.dev`, `playwright.download.prss.microsoft.com`, `playwright.azureedge.net`, `storage.googleapis.com` (Chrome for Testing), `edgedl.me.gvt1.com` and `dl.google.com` all return `http=000` (TLS reset). The npm `playwright` package is only the ~5 MB driver and contains no browsers. The only npm-reachable browser binary is a third-party repackaging (`@sparticuz/chromium`), which is not an official browser distribution and was **not** installed, per instructions. Arena exposes no in-guest browser-provisioning mechanism. Independently, the app runtime is blocked, so authenticated browser UAT could not be completed even if a browser were present. |
+
+> **BROWSER UAT = ENVIRONMENT BLOCKED.** No browser results were fabricated, and
+> HTTP-level responses are not presented as browser validation.
+
+## Dependencies
+
+`npm audit` re-run this phase: **5 findings — 2 moderate, 3 high, 0 critical**
+(unchanged from P15.1/P15.2), with **no forced upgrades performed**.
+
+| Package | Direct/transitive | Chain | Severity | Fixed version | Compatibility | Runtime relevance |
+|---|---|---|---|---|---|---|
+| `deepmerge-ts` | transitive | `prisma` → `@prisma/config` → `deepmerge-ts` | high | ≥ 8.0.0 | **None available.** `@prisma/config@6.19.3` pins `"deepmerge-ts": "7.1.5"` **exactly**; the advisory range is `<8.0.0`; no release of Prisma in the vulnerable range fixes it | Build-time CLI only; this repository has no `prisma.config.ts`, so the config-merge path is not exercised |
+| `@prisma/config` | transitive | `prisma` → `@prisma/config` | high | — | Same as above | Build-time only |
+| `prisma` | **direct** | direct | high | only ≥ 8.2.0-dev line | **No.** npm's suggested "fix" is an anomalous *downgrade* to `prisma@6.12.0` | Build-time only |
+| `@vitest/mocker` | transitive | `vitest` → `@vitest/mocker` | moderate | ≥ 4.1.11 | **None available.** 3.2.7 is both installed and the newest 3.x; the 3.x line has no patched release | Test-time only; requires an attacker-controlled redirect mock inside a test file |
+| `vitest` | **direct** | direct | moderate | ≥ 4.1.11 / 5.x | **No** — a major tooling upgrade | Test-time only |
+
+**Safe remediation options: none today.** The Prisma/deepmerge finding is caused
+by Prisma's own pinned dependency, so it must be fixed by an upstream Prisma
+release (or an explicitly approved, separately validated override — impossible
+to validate here, since the Prisma CLI itself is blocked). The Vitest findings
+require a major tooling upgrade, which would invalidate the 798-test baseline
+and must be a deliberate, separately tested change rather than a nudge from
+`npm audit`. Both are documented instead of forced, exactly as instructed.
+
+## Rate Limiter
+
+`src/lib/security/rate-limiter.ts` is a process-local in-memory `Map`, used only
+by `POST /api/auth/login` (20 requests / 10 min per IP **and** 10 / 10 min per
+email) and `POST /api/setup` (5 / 10 min per IP).
+
+| Facet | Assessment |
+|---|---|
+| Single-instance status | **Safe. SINGLE-INSTANCE RATE-LIMIT REQUIREMENT.** All requests to one application process share the counters, which is exactly the brute-force protection the code intends. The prepared deployment (`render.yaml`) provisions **one** web service, so the intended topology satisfies the requirement. A restart merely resets counters, which is acceptable for this control. |
+| Multi-instance implications | **Not a global limit.** Each instance keeps its own counters, so the effective allowance multiplies by the instance count. If production ever needs more than one web instance, a **shared rate-limit store** (Redis, or a database-backed counter) becomes a hard prerequisite — documented as a future production-topology requirement, not implemented now. Worker scaling is unaffected, because job claiming is database-serialised (`SELECT … FOR UPDATE SKIP LOCKED`). Secondary note: a limiter entry is only replaced when the same key recurs, so a client presenting many distinct keys accumulates entries for the life of the process — acceptable for a single-user deployment, worth revisiting before exposing the login route to broad untrusted traffic. |
+
+No Redis, no paid service and no infrastructure was added. A review of
+module-level state (`new Map(`, `new Set(`, `globalThis` across `src/`) found
+only immutable lookup tables plus the intentional Prisma dev global — the rate
+limiter is the only per-process *mutable* control that constrains instance count.
+
+## Environment Conclusion
+
+**ENVIRONMENT BLOCKED — EXTERNAL ENVIRONMENT CHANGE REQUIRED**
+
+The exact external capability required:
+
+1. **Outbound HTTPS egress to Prisma's engine CDN `binaries.prisma.sh`** (and
+   its failover `binaries-failover.prisma.sh`), for engine commit
+   `c2990dca591cba766e3b7ef5d9e8a84796e47ab7` and platform
+   `debian-openssl-3.0.x`, so the normal CLI can fetch `schema-engine.gz`
+   (+ `.sha256`) for validate/generate/migrate and `libquery_engine.so.node`
+   (+ `.sha256`) for the runtime client. Equivalent acceptable alternatives,
+   in order of preference: a **trusted mirror reachable from the sandbox that
+   serves the same `/all_commits/<hash>/<platform>/…` layout** (configured via
+   the official `PRISMA_ENGINES_MIRROR`), or an environment that **pre-populates
+   the official engine cache/paths** (`PRISMA_SCHEMA_ENGINE_BINARY`,
+   `PRISMA_QUERY_ENGINE_LIBRARY`, `PRISMA_MIGRATION_ENGINE_BINARY`) before the
+   app is built.
+2. **For browser UAT only:** allow the official browser distribution hosts
+   (Playwright CDN/Microsoft mirrors or Chrome-for-Testing/Google), or supply a
+   sandbox template that already contains a browser. This is secondary — the
+   application runtime must be unblocked first for authenticated UAT to mean
+   anything.
+
+Nothing in the repository needs to change to accept that capability: once the
+engine artifacts are reachable, the committed commands (`npx prisma generate`,
+`npx prisma validate`, `npx prisma migrate deploy`, `npm run build`,
+`npm run worker`) are expected to work as written. **No repository change was
+required by this phase beyond this documentation.**
