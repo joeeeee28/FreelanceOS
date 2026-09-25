@@ -10,6 +10,7 @@
  */
 
 import { decideSchedule, type ScheduleState } from "@/lib/discovery/scheduler";
+import { reconcileDiscoveryRuns } from "@/lib/discovery/runs";
 import { db } from "@/lib/db-client";
 import { enqueueJob } from "@/lib/jobs/queue";
 import { runWorker, type WorkerEvent } from "@/lib/jobs/worker";
@@ -86,6 +87,24 @@ async function enqueueDueCycles(): Promise<number> {
   return queued;
 }
 
+/**
+ * One scheduler pass: close finished runs, then queue any cycles that are due.
+ *
+ * Reconciling first matters. A run whose jobs have all finished is closed here
+ * even if the worker that finished the last one died before settling it, and
+ * closing it before reading run state below means the decision is made on the
+ * run's real status rather than a stale RUNNING row.
+ */
+async function schedulerTick(): Promise<void> {
+  const { settled } = await reconcileDiscoveryRuns();
+
+  if (settled > 0) {
+    log(`settled ${settled} finished discovery run(s)`);
+  }
+
+  await enqueueDueCycles();
+}
+
 async function main(): Promise<void> {
   const controller = new AbortController();
   let shuttingDown = false;
@@ -109,12 +128,12 @@ async function main(): Promise<void> {
 
   // Scheduling runs on its own timer so a long queue cannot delay it.
   const scheduler = setInterval(() => {
-    void enqueueDueCycles().catch((error: unknown) => {
+    void schedulerTick().catch((error: unknown) => {
       log(`scheduler error: ${error instanceof Error ? error.message : String(error)}`);
     });
   }, POLL_INTERVAL_MS);
 
-  await enqueueDueCycles().catch(() => undefined);
+  await schedulerTick().catch(() => undefined);
 
   const stats = await runWorker({
     signal: controller.signal,

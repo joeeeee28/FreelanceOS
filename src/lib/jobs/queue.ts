@@ -13,6 +13,7 @@ import { Prisma } from "@prisma/client";
 import type { JobStatus, JobType } from "@prisma/client";
 
 import { db } from "@/lib/db-client";
+import { settleDiscoveryRun } from "@/lib/discovery/runs";
 
 /**
  * Postgres-backed job queue.
@@ -191,7 +192,7 @@ export async function completeJob(
   result?: Prisma.InputJsonValue,
   now: Date = new Date(),
 ) {
-  return db.job.update({
+  const job = await db.job.update({
     where: { id: jobId },
     data: {
       status: "SUCCEEDED",
@@ -202,6 +203,36 @@ export async function completeJob(
       error: null,
     },
   });
+
+  await settleOwningRun(job.discoveryRunId, now);
+
+  return job;
+}
+
+/**
+ * Best-effort close of the run this job belongs to.
+ *
+ * Called only once a job has actually reached a terminal status. The job's own
+ * outcome is already committed by then, so a failure here is logged rather than
+ * thrown: it must not turn a finished job into a failed one, or make the queue
+ * re-report work that was completed. `reconcileDiscoveryRuns()` on the worker's
+ * scheduler tick is the backstop that closes anything missed.
+ */
+async function settleOwningRun(
+  discoveryRunId: string | null,
+  now: Date,
+): Promise<void> {
+  if (discoveryRunId === null) return;
+
+  try {
+    await settleDiscoveryRun(discoveryRunId, now);
+  } catch (error) {
+    console.error(
+      `[jobs] could not settle discovery run ${discoveryRunId}: ` +
+        `${error instanceof Error ? error.message : String(error)} ` +
+        "(the run is reconciled on the next scheduler tick)",
+    );
+  }
 }
 
 /**
@@ -224,13 +255,13 @@ export async function failJob(
 
   const job = await db.job.findUniqueOrThrow({
     where: { id: jobId },
-    select: { attempts: true, maxAttempts: true },
+    select: { attempts: true, maxAttempts: true, discoveryRunId: true },
   });
 
   const exhausted = !retryable || job.attempts >= job.maxAttempts;
 
   if (exhausted) {
-    return db.job.update({
+    const failed = await db.job.update({
       where: { id: jobId },
       data: {
         status: "FAILED",
@@ -240,8 +271,14 @@ export async function failJob(
         lockedUntil: null,
       },
     });
+
+    // Terminal: this may have been the last job the run was waiting for.
+    await settleOwningRun(job.discoveryRunId, now);
+
+    return failed;
   }
 
+  // Still retryable, so the job is not terminal and the run is not settled.
   return db.job.update({
     where: { id: jobId },
     data: {
@@ -272,6 +309,11 @@ export async function heartbeatJob(
 
 /** Manual control: cancels a job that has not finished. */
 export async function cancelJob(jobId: string, now: Date = new Date()) {
+  const existing = await db.job.findUnique({
+    where: { id: jobId },
+    select: { discoveryRunId: true },
+  });
+
   const { count } = await db.job.updateMany({
     where: { id: jobId, status: { in: ["PENDING", "RUNNING"] } },
     data: {
@@ -281,6 +323,11 @@ export async function cancelJob(jobId: string, now: Date = new Date()) {
       lockedUntil: null,
     },
   });
+
+  // Cancelling is terminal for the job, so the run may now be able to close.
+  if (count === 1) {
+    await settleOwningRun(existing?.discoveryRunId ?? null, now);
+  }
 
   return count === 1;
 }

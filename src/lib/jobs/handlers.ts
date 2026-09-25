@@ -17,6 +17,7 @@ import { db } from "@/lib/db-client";
 import { syncCompanyToLead } from "@/lib/discovery/crm-sync";
 import { runSource } from "@/lib/discovery/pipeline";
 import { providerRegistry } from "@/lib/discovery/providers";
+import { settleDiscoveryRun } from "@/lib/discovery/runs";
 import { refreshCompanySignals } from "@/lib/discovery/signals/store";
 import { ingestKnowledgeResource } from "@/lib/knowledge/ingest";
 import { researchCompany } from "@/lib/research/runner";
@@ -55,6 +56,12 @@ function readString(payload: Prisma.JsonValue, key: string): string | null {
  *
  * Fans out rather than crawling inline, so a slow source cannot hold the cycle
  * open and each source can fail and retry independently.
+ *
+ * The run itself is *not* completed here. It stays RUNNING until every job
+ * belonging to it has reached a terminal state, which is decided by
+ * `settleDiscoveryRun()` when each of those jobs finishes (see
+ * `@/lib/discovery/runs`). The job doing this fan-out counts as one of them, so
+ * a second worker cannot close the run while children are still being queued.
  */
 const discoveryRun: JobHandler = async (context) => {
   const { workspaceId } = context;
@@ -68,6 +75,15 @@ const discoveryRun: JobHandler = async (context) => {
 
   const run = await db.discoveryRun.create({
     data: { workspaceId, status: "RUNNING", startedAt: now, trigger: "SCHEDULED" },
+  });
+
+  // Link the fan-out job to the run it created. `updateMany` rather than
+  // `update`: handlers are also invoked directly (by tests, and by any future
+  // one-shot run) where there is no real job row to update, and a no-op is the
+  // correct outcome there.
+  await db.job.updateMany({
+    where: { id: context.jobId },
+    data: { discoveryRunId: run.id },
   });
 
   let enqueued = 0;
@@ -103,10 +119,10 @@ const discoveryRun: JobHandler = async (context) => {
   }
 
   if (sources.length === 0 && companies.length === 0) {
-    await db.discoveryRun.update({
-      where: { id: run.id },
-      data: { status: "COMPLETED", completedAt: new Date() },
-    });
+    // Nothing was queued, so nothing is outstanding: the run is finished. (When
+    // this handler ran as a real job, that job is still RUNNING and the run
+    // closes the moment it is marked finished — the same rule as any other run.)
+    await settleDiscoveryRun(run.id, now);
 
     return { ok: true, summary: "Nothing to do: no enabled sources or companies.", enqueued: 0 };
   }
