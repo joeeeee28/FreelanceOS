@@ -33,10 +33,52 @@ const CANDIDATE_PATHS = [
   "/about-us",
 ] as const;
 
-/** Sitemap entries matching these are worth reading. */
-const INTERESTING = /(contact|about|impressum|legal|team)/i;
+/**
+ * Only top-level information pages are relevant to the owner of the site we
+ * were asked to inspect. Matching a word anywhere in a sitemap URL is unsafe:
+ * a marketplace can contain a third-party product named "contact" or "legal",
+ * and its details must never become facts about the marketplace itself.
+ */
+const INFORMATION_PAGE_PATH =
+  /^\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?(?:contact(?:-us)?|about(?:-us)?|impressum|legal|team)(?:\/|$)/i;
 
 export const DEFAULT_MAX_PAGES = 5;
+
+/**
+ * Returns a URL only when it still belongs to the target business website.
+ *
+ * A registrable-domain comparison is too broad for this purpose: unrelated
+ * tenants can share a public-suffix host (for example, on hosted platforms).
+ * We accept the exact host and only the conventional www/non-www equivalent.
+ * Protocol changes are allowed, but an explicitly supplied non-default port
+ * must remain unchanged.
+ */
+function siteUrl(raw: string, origin: string): URL | null {
+  let candidate: URL;
+  let target: URL;
+
+  try {
+    candidate = new URL(raw, origin);
+    target = new URL(origin);
+  } catch {
+    return null;
+  }
+
+  const candidateHost = candidate.hostname.toLowerCase().replace(/\.$/, "");
+  const targetHost = target.hostname.toLowerCase().replace(/\.$/, "");
+  const sameHost =
+    candidateHost === targetHost ||
+    candidateHost === `www.${targetHost}` ||
+    targetHost === `www.${candidateHost}`;
+
+  if (!sameHost || candidate.port !== target.port) return null;
+
+  return candidate;
+}
+
+function isInformationPage(url: URL): boolean {
+  return INFORMATION_PAGE_PATH.test(url.pathname);
+}
 
 export interface WebsiteProviderConfig {
   /** Sites to inspect. */
@@ -124,6 +166,17 @@ async function inspectSite(
     }
 
     result.pagesSucceeded += 1;
+
+    // A same-site URL may redirect to a third-party login, checkout or CDN.
+    // Reading it would attribute the third party's contact details to the
+    // requested business, so retain the fetch log but reject it as evidence.
+    if (siteUrl(document.url, origin) === null) {
+      result.warnings.push(
+        `Skipped cross-site response while inspecting ${page}`,
+      );
+      continue;
+    }
+
     facts.push(...extractFacts({ url: document.url, html: document.body }));
   }
 
@@ -201,9 +254,15 @@ async function selectPages(
     let body = sitemap.body;
     if (isSitemapIndex(body)) {
       const first = extractSitemapUrls(body)[0];
-      if (first !== undefined) {
+      const nestedUrl =
+        first === undefined ? null : siteUrl(first, origin);
+
+      if (first !== undefined && nestedUrl === null) {
+        result.warnings.push("Skipped cross-site sitemap index entry");
+        body = "";
+      } else if (nestedUrl !== null) {
         result.pagesAttempted += 1;
-        const nested = await context.fetcher.fetch(first);
+        const nested = await context.fetcher.fetch(nestedUrl.toString());
         if (nested.outcome === "SUCCESS" && typeof nested.body === "string") {
           result.pagesSucceeded += 1;
           body = nested.body;
@@ -214,9 +273,17 @@ async function selectPages(
       }
     }
 
-    for (const url of extractSitemapUrls(body)) {
+    for (const rawUrl of extractSitemapUrls(body)) {
       if (pages.length >= maxPages) break;
-      if (INTERESTING.test(url) && !pages.includes(url)) pages.push(url);
+
+      const candidate = siteUrl(rawUrl, origin);
+      if (
+        candidate !== null &&
+        isInformationPage(candidate) &&
+        !pages.includes(candidate.toString())
+      ) {
+        pages.push(candidate.toString());
+      }
     }
   } else if (sitemap.outcome === "BLOCKED") {
     result.pagesBlocked += 1;

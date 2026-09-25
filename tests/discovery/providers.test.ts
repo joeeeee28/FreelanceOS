@@ -374,6 +374,7 @@ describe("repositoryProvider", () => {
           { full_name: "acme/site", homepage: "https://acme-agency.test", owner: { login: "acme" } },
           { full_name: "acme/none", homepage: "" },
           { full_name: "acme/social", homepage: "https://facebook.com/acme" },
+          { full_name: "acme/package", homepage: "https://npmjs.com/package/acme" },
         ]),
       },
     });
@@ -382,6 +383,8 @@ describe("repositoryProvider", () => {
 
     expect(result.entities).toHaveLength(1);
     expect(result.entities[0].identity.domain).toBe("acme-agency.test");
+    // The repository owner is not proof that it owns the advertised homepage.
+    expect(result.entities[0].identity.name).toBeNull();
   });
 
   it("handles a search-style payload and invalid JSON", async () => {

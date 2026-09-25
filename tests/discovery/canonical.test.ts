@@ -40,6 +40,20 @@ describe("canonicalDomain", () => {
     expect(canonicalDomain("https://www.shop.example.com")).toBe("example.com");
   });
 
+  it("does not merge tenants hosted on a shared platform domain", () => {
+    // These hosts serve independent organisations from subdomains. Collapsing
+    // either to github.io/vercel.sh would make unrelated companies merge.
+    expect(canonicalDomain("https://ebookfoundation.github.io")).toBe(
+      "ebookfoundation.github.io",
+    );
+    expect(canonicalDomain("https://release-auth.vercel.sh")).toBe(
+      "release-auth.vercel.sh",
+    );
+    expect(canonicalDomain("https://avatar.vercel.sh")).toBe(
+      "avatar.vercel.sh",
+    );
+  });
+
   it("rejects inputs that cannot identify a business", () => {
     for (const input of [
       null,

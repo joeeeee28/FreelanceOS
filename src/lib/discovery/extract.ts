@@ -148,6 +148,69 @@ function isOrganisationNode(node: Record<string, unknown>): boolean {
   );
 }
 
+/**
+ * Finds a social profile only when the anchor explicitly declares that role.
+ *
+ * A URL alone is not ownership evidence: documentation, sponsorship banners,
+ * and user content routinely link to Facebook, LinkedIn, and other platforms.
+ * Requiring an aria/title/class/data label (or rel=me) deliberately trades a
+ * little recall for avoiding false company-profile attribution.
+ */
+function extractDeclaredSocialLink(
+  html: string,
+  platform: string,
+  expectedHost: string,
+  requiredPath: string | null,
+): string | null {
+  const platformLabel = new RegExp(`\\b${platform}\\b`, "i");
+
+  for (const match of html.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/gi)) {
+    const attrs = match[1];
+    const href =
+      /\bhref\s*=\s*["']([^"']+)["']/i.exec(attrs)?.[1]?.trim() ?? null;
+    if (href === null) continue;
+
+    let parsed: URL;
+    try {
+      parsed = new URL(href);
+    } catch {
+      continue;
+    }
+
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") continue;
+
+    const hostname = parsed.hostname.toLowerCase();
+    if (
+      hostname !== expectedHost &&
+      !hostname.endsWith(`.${expectedHost}`)
+    ) {
+      continue;
+    }
+
+    if (
+      requiredPath !== null &&
+      !parsed.pathname.toLowerCase().startsWith(requiredPath)
+    ) {
+      continue;
+    }
+
+    // Do not let the platform name in the href satisfy the declaration check.
+    const attributesWithoutHref = attrs.replace(
+      /\bhref\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi,
+      "",
+    );
+    const isExplicitlyLabelled = platformLabel.test(attributesWithoutHref);
+    const isIdentityLink =
+      /\brel\s*=\s*["'][^"']*\bme\b[^"']*["']/i.test(attrs);
+
+    if (!isExplicitlyLabelled && !isIdentityLink) continue;
+
+    return parsed.toString();
+  }
+
+  return null;
+}
+
 export interface ExtractionInput {
   url: string;
   html: string;
@@ -256,17 +319,21 @@ export function extractFacts(input: ExtractionInput): ObservedFact[] {
   const tel = /href\s*=\s*["']tel:([^"']+)/i.exec(html)?.[1] ?? null;
   add("phone", tel, "HTML_SELECTOR", "a[href^=tel]");
 
-  for (const [field, host] of [
-    ["linkedinUrl", "linkedin.com/company"],
-    ["instagramUrl", "instagram.com"],
-    ["facebookUrl", "facebook.com"],
-    ["youtubeUrl", "youtube.com"],
+  for (const [field, platform, host, requiredPath] of [
+    ["linkedinUrl", "linkedin", "linkedin.com", "/company/"],
+    ["instagramUrl", "instagram", "instagram.com", null],
+    ["facebookUrl", "facebook", "facebook.com", null],
+    ["youtubeUrl", "youtube", "youtube.com", null],
   ] as const) {
-    const pattern = new RegExp(
-      `href\\s*=\\s*["'](https?://[^"']*${host.replace(/\./g, "\\.")}[^"']*)["']`,
-      "i",
+    const socialUrl = extractDeclaredSocialLink(
+      html,
+      platform,
+      host,
+      requiredPath,
     );
-    add(field, pattern.exec(html)?.[1] ?? null, "HTML_SELECTOR", `a[href*=${host}]`);
+    if (socialUrl !== null) {
+      add(field, socialUrl, "HTML_SELECTOR", `a[href*=${host}]`);
+    }
   }
 
   // 4. Title, as a last resort for the company name.

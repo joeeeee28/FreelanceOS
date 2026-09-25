@@ -203,6 +203,41 @@ describe("websiteProvider", () => {
     expect(email?.value).toBe("info@fixture.test");
   });
 
+  it("does not attribute sitemap-listed third-party content to the site owner", async () => {
+    const routes: Record<string, { body?: string; contentType?: string; status?: number }> = {
+      "/robots.txt": ROBOTS,
+      "/": { body: "<html><head><title>Marketplace</title></head></html>" },
+      "/sitemap.xml": { contentType: "application/xml", body: "" },
+      "/about-us": {
+        body: `<html><body><a href="mailto:owner@marketplace.test">Email us</a></body></html>`,
+      },
+      "/projects/partner-contact": {
+        body: `<html><body><a href="mailto:partner@other.test">Partner email</a></body></html>`,
+      },
+    };
+
+    server = await startFixtureServer(routes);
+    routes["/sitemap.xml"].body = `<?xml version="1.0"?>
+      <urlset>
+        <url><loc>${server.url}/projects/partner-contact</loc></url>
+        <url><loc>https://unrelated.example/contact</loc></url>
+        <url><loc>${server.url}/about-us</loc></url>
+      </urlset>`;
+
+    const result = await websiteProvider.run(
+      contextFor(server, { urls: [server.url] }),
+    );
+
+    // "contact" inside a project URL and a foreign sitemap URL are not
+    // evidence about the marketplace. Only its own top-level about page is
+    // eligible for fact extraction.
+    expect(server.hits.get("/projects/partner-contact")).toBeUndefined();
+    expect(server.hits.get("/about-us")).toBe(1);
+    expect(result.entities[0].facts.find((f) => f.field === "email")?.value).toBe(
+      "owner@marketplace.test",
+    );
+  });
+
   it("keeps going when a page is blocked, and reports it", async () => {
     server = await startFixtureServer({
       "/robots.txt": {
