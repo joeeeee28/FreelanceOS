@@ -18,9 +18,10 @@ import { syncCompanyToLead } from "@/lib/discovery/crm-sync";
 import { runSource } from "@/lib/discovery/pipeline";
 import { providerRegistry } from "@/lib/discovery/providers";
 import { settleDiscoveryRun } from "@/lib/discovery/runs";
+import { serialiseRunCounters, type RunCounters } from "@/lib/discovery/run-counters";
 import { refreshCompanySignals } from "@/lib/discovery/signals/store";
 import { ingestKnowledgeResource } from "@/lib/knowledge/ingest";
-import { researchCompany } from "@/lib/research/runner";
+import { runCompanyResearch } from "@/lib/research/run";
 import { selectCompaniesForResearch } from "@/lib/research/runner";
 import { enqueueJob } from "./queue";
 
@@ -39,6 +40,14 @@ export interface HandlerResult {
   summary: string;
   /** Jobs this handler queued as follow-up work. */
   enqueued?: number;
+  /**
+   * What this job actually produced, in DiscoveryRun counter terms.
+   *
+   * Stored on the job result and aggregated per run by
+   * `@/lib/discovery/run-counters`. Omitted when a job produced no countable
+   * work, which is the honest answer for a no-op rather than a row of zeroes.
+   */
+  counters?: RunCounters;
 }
 
 export type JobHandler = (context: HandlerContext) => Promise<HandlerResult>;
@@ -153,6 +162,20 @@ const crawlSource: JobHandler = async (context) => {
     return { ok: true, summary: result.error ?? "Source run failed" };
   }
 
+  // Counted from what the pipeline reports, not from anything this handler
+  // guessed: pages actually fetched, companies actually created or matched,
+  // and facts the store refused because it already held an equal or stronger
+  // value.
+  const counters = serialiseRunCounters({
+    pagesAttempted: result.pagesAttempted,
+    pagesSucceeded: result.pagesSucceeded,
+    pagesFailed: result.pagesFailed,
+    pagesBlocked: result.pagesBlocked,
+    companiesDiscovered: result.companiesCreated,
+    companiesMatched: result.companiesMatched,
+    duplicatesPrevented: result.duplicatesPrevented,
+  });
+
   let enqueued = 0;
 
   for (const companyId of result.companyIds) {
@@ -173,6 +196,7 @@ const crawlSource: JobHandler = async (context) => {
       `${result.entitiesValid} valid entities, ${result.companiesCreated} new, ` +
       `${result.pagesBlocked} blocked.`,
     enqueued,
+    counters,
   };
 };
 
@@ -204,6 +228,12 @@ const extractSignals: JobHandler = async (context) => {
     ok: true,
     summary: `${result.signalsDetected} signals, ${result.opportunitiesCreated} new opportunities.`,
     enqueued: 1,
+    // Only rows this pass actually created: re-detecting a known signal
+    // refreshes it, and a refresh is not a discovery.
+    counters: serialiseRunCounters({
+      signalsDiscovered: result.signalsCreated,
+      opportunitiesDiscovered: result.opportunitiesCreated,
+    }),
   };
 };
 
@@ -225,28 +255,40 @@ const updateCrm: JobHandler = async (context) => {
     now: context.now,
   });
 
-  return { ok: true, summary: `CRM sync: ${result.kind}.` };
+  return {
+    ok: true,
+    summary: `CRM sync: ${result.kind}.`,
+    // A sync that changed nothing is not a lead created or updated.
+    counters: serialiseRunCounters({
+      leadsCreated: result.kind === "CREATED" ? 1 : 0,
+      leadsUpdated: result.kind === "UPDATED" ? 1 : 0,
+    }),
+  };
 };
 
-/** Researches one company incrementally. */
+/**
+ * Researches one company from its own published pages.
+ *
+ * The work itself lives in `@/lib/research/run`: this handler only validates
+ * the payload and reports the outcome, so the pipeline can be tested without a
+ * queue. A company with no website, or one that refuses access, is a normal
+ * outcome with a truthful summary — not a failure to be retried three times.
+ */
 const researchCompanyJob: JobHandler = async (context) => {
   const companyId = readString(context.payload, "companyId");
   if (companyId === null) return { ok: false, summary: "No companyId in payload" };
 
-  // Researchers are registered by the worker that owns network access; with
-  // none supplied this is a no-op rather than a failure.
-  const result = await researchCompany({
+  const outcome = await runCompanyResearch({
     workspaceId: context.workspaceId,
     companyId,
-    fetcher: { async fetch(url) { return { url, outcome: "NETWORK_ERROR", error: "No fetcher configured" }; } },
-    researchers: {},
     signal: context.signal,
     now: context.now,
   });
 
   return {
-    ok: true,
-    summary: result.skipped ?? `${result.aspectsRun} of ${result.aspectsPlanned} aspects researched.`,
+    ok: outcome.ok,
+    summary: outcome.summary,
+    counters: outcome.counters,
   };
 };
 

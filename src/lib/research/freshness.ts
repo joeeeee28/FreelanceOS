@@ -149,12 +149,25 @@ export function decideAspect(
  */
 export function planResearch(
   states: readonly AspectState[],
-  options: { now?: Date; maxAspects?: number } = {},
+  options: {
+    now?: Date;
+    maxAspects?: number;
+    /**
+     * The aspects the caller can actually investigate, in the order it wants
+     * them. Defaults to the full priority list. Passing a narrower list matters
+     * when the cap is applied: slicing twelve aspects down to six and *then*
+     * discarding the ones with no researcher silently starves the aspects at
+     * the bottom of the list (geography, company information) forever.
+     */
+    aspects?: readonly ResearchAspect[];
+  } = {},
 ): FreshnessDecision[] {
   const now = options.now ?? new Date();
   const byAspect = new Map(states.map((state) => [state.aspect, state]));
 
-  const decisions = ASPECT_PRIORITY.map((aspect) =>
+  const order = options.aspects ?? ASPECT_PRIORITY;
+
+  const decisions = order.map((aspect) =>
     decideAspect(byAspect.get(aspect), aspect, now),
   );
 

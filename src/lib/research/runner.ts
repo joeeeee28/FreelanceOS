@@ -12,14 +12,20 @@ import type { Prisma, PrismaClient, ResearchAspect } from "@prisma/client";
 
 import { db } from "@/lib/db-client";
 import { ingestDiscoveredEntity, type ObservedFact } from "@/lib/discovery/ingest";
-import { refreshCompanySignals } from "@/lib/discovery/signals/store";
+import {
+  refreshCompanySignals,
+  type RefreshResult,
+} from "@/lib/discovery/signals/store";
+import type { PageSignals } from "@/lib/discovery/signals/rules";
 import type { Fetcher } from "@/lib/discovery/provider";
 import {
+  ASPECT_PRIORITY,
   aggregateStatus,
   freshUntilFor,
   planResearch,
   type AspectState,
 } from "./freshness";
+import { hasPageEvidence, mergePageSignals } from "./page-signals";
 
 /** What an aspect researcher returns. */
 export interface AspectFindings {
@@ -29,6 +35,15 @@ export interface AspectFindings {
   blocked?: boolean;
   /** True if only some of the aspect could be established. */
   partial?: boolean;
+  /**
+   * What the pages this aspect read prove about the site itself — viewport,
+   * protocol, copyright year, platform, page size, pixels, blog.
+   *
+   * These are not company fields, so they are not observations; they are the
+   * evidence the signal rules need, and they are merged across aspects and
+   * handed to signal detection at the end of the pass.
+   */
+  pageSignals?: PageSignals;
 }
 
 export type AspectResearcher = (context: {
@@ -63,6 +78,10 @@ export interface ResearchCompanyResult {
   aspectsRun: number;
   results: AspectResult[];
   skipped?: string;
+  /** Detection outcome for this pass, when the pass produced anything new. */
+  signals?: RefreshResult;
+  /** Page evidence gathered this pass, if any aspect read a page. */
+  pageSignals?: PageSignals;
 }
 
 /**
@@ -92,9 +111,24 @@ export async function researchCompany(
   }
 
   const states = await loadAspectStates(client, companyId);
-  const plan = planResearch(states, { now, maxAspects: options.maxAspects });
+  // Only the aspects this caller can investigate are planned. Planning the
+  // full priority list and then skipping the unsupported entries would let the
+  // per-company cap be spent on work that was never going to happen — which is
+  // how geography and company information ended up never being researched.
+  const supported = ASPECT_PRIORITY.filter(
+    (aspect) => options.researchers[aspect] !== undefined,
+  );
+  const plan = planResearch(states, {
+    now,
+    maxAspects: options.maxAspects,
+    aspects: supported,
+  });
 
   const results: AspectResult[] = [];
+
+  // Merged across aspects: the site is one site, however many questions were
+  // asked of it.
+  let gathered: PageSignals = {};
 
   for (const decision of plan) {
     if (options.signal?.aborted === true) break;
@@ -130,6 +164,10 @@ export async function researchCompany(
       });
     } catch (caught) {
       error = caught instanceof Error ? caught.message : String(caught);
+    }
+
+    if (findings !== null && findings.pageSignals !== undefined) {
+      gathered = mergePageSignals(gathered, findings.pageSignals);
     }
 
     if (findings === null) {
@@ -219,10 +257,21 @@ export async function researchCompany(
     },
   });
 
-  // New facts may imply new signals. Re-running detection here keeps the two
-  // in step without a separate scheduled pass.
-  if (results.some((result) => result.factsChanged > 0)) {
-    await refreshCompanySignals({ workspaceId, companyId, now });
+  // New facts may imply new signals, and page evidence implies the rules that
+  // only fire on a site that was actually read. Re-running detection here keeps
+  // the two in step without a separate scheduled pass; the store is idempotent,
+  // so a company already carrying these signals is refreshed, not duplicated.
+  const hasPageEvidenceGathered = hasPageEvidence(gathered);
+
+  let signals: RefreshResult | undefined;
+
+  if (results.some((result) => result.factsChanged > 0) || hasPageEvidenceGathered) {
+    signals = await refreshCompanySignals({
+      workspaceId,
+      companyId,
+      ...(hasPageEvidenceGathered ? { facts: { pageSignals: gathered } } : {}),
+      now,
+    });
   }
 
   return {
@@ -230,6 +279,8 @@ export async function researchCompany(
     aspectsPlanned: plan.length,
     aspectsRun: results.length,
     results,
+    ...(signals === undefined ? {} : { signals }),
+    ...(hasPageEvidenceGathered ? { pageSignals: gathered } : {}),
   };
 }
 

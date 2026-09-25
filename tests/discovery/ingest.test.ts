@@ -417,10 +417,18 @@ describe("ingestDiscoveredEntity", () => {
         1,
       );
 
-      // Same confidence and not newer, so the value is left alone.
+      // The identical claim was already observed from the same place, so it is
+      // recognised as a repeat rather than re-recorded: the value is left
+      // alone, and — since a second identical crawl must be idempotent — no
+      // duplicate observation row is written either.
       const emailField = second.fields.find((f) => f.field === "email");
       expect(emailField?.promoted).toBe(false);
-      expect(emailField?.reason).toBe("SAME_CONFIDENCE_NOT_NEWER");
+      expect(emailField?.reason).toBe("ALREADY_OBSERVED");
+      expect(
+        await db.observation.count({
+          where: { companyId: first.companyId, field: "email" },
+        }),
+      ).toBe(1);
     });
   });
 

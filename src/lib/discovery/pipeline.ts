@@ -69,6 +69,12 @@ export interface RunSourceResult {
   entitiesRejected: number;
   companiesCreated: number;
   companiesMatched: number;
+  /**
+   * Observed facts that were not written onto the company because an equal or
+   * stronger value was already held. Counted so a run can report that it
+   * recognised existing data rather than quietly doing nothing with it.
+   */
+  duplicatesPrevented: number;
   needsReview: number;
   /**
    * Companies this run created or touched, so the caller can queue follow-up
@@ -145,6 +151,7 @@ export async function runSource(
     companiesCreated: 0,
     companyIds: [],
     companiesMatched: 0,
+    duplicatesPrevented: 0,
     needsReview: 0,
     warnings: [],
   };
@@ -248,6 +255,19 @@ export async function runSource(
     if (ingested.kind === "INGESTED") {
       if (ingested.created) result.companiesCreated += 1;
       else result.companiesMatched += 1;
+
+      // Facts the store recognised as already known: the incoming value lost
+      // to the held one, so nothing was overwritten and no duplicate was
+      // written. `BELOW_THRESHOLD` is excluded — that is a claim too weak to
+      // trust, not a duplicate of anything.
+      result.duplicatesPrevented += ingested.fields.filter(
+        (field) =>
+          !field.promoted &&
+          (field.reason === "SAME_CONFIDENCE_NOT_NEWER" ||
+            field.reason === "LOWER_CONFIDENCE" ||
+            field.reason === "ALREADY_OBSERVED"),
+      ).length;
+
       result.companyIds.push(ingested.companyId);
     } else if (ingested.kind === "NEEDS_REVIEW") {
       result.needsReview += 1;

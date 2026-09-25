@@ -26,6 +26,7 @@
  */
 
 import { db } from "@/lib/db-client";
+import { totalRunCounters, type RunCounterTotals } from "./run-counters";
 
 /** Mirror of the Prisma `JobStatus` enum, used for counting without importing it. */
 type JobStatusName = "PENDING" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED";
@@ -57,24 +58,30 @@ export interface DiscoveryRunSettlement {
   activeChildren: number;
   /** Every job belonging to the run, whatever its status. */
   children: number;
+  /**
+   * What the run's jobs actually produced, aggregated from their structured
+   * results. Reported whether or not this call wrote them.
+   */
+  counters: RunCounterTotals;
 }
 
 /**
- * Counts the jobs belonging to a run.
+ * The run's jobs, read once.
  *
- * One grouped query rather than several counts, so a run with hundreds of jobs
- * is still a single round trip.
+ * One query serves both purposes: how many jobs are still outstanding, and
+ * what the finished ones produced. Reading them together also means the
+ * status and the tally can never disagree about which jobs they saw.
  */
-async function countRunJobs(
-  discoveryRunId: string,
-): Promise<DiscoveryRunJobCounts> {
-  const grouped: Array<{ status: JobStatusName; _count: { _all: number } }> =
-    await db.job.groupBy({
-      by: ["status"],
-      where: { discoveryRunId },
-      _count: { _all: true },
-    });
+async function readRunJobs(discoveryRunId: string): Promise<
+  Array<{ status: JobStatusName; result: unknown }>
+> {
+  return db.job.findMany({
+    where: { discoveryRunId },
+    select: { status: true, result: true },
+  });
+}
 
+function countJobs(rows: readonly { status: JobStatusName }[]): DiscoveryRunJobCounts {
   const counts: DiscoveryRunJobCounts = {
     active: 0,
     total: 0,
@@ -83,23 +90,22 @@ async function countRunJobs(
     cancelled: 0,
   };
 
-  for (const row of grouped) {
-    const howMany = row._count?._all ?? 0;
-    counts.total += howMany;
+  for (const row of rows) {
+    counts.total += 1;
 
     switch (row.status) {
       case "PENDING":
       case "RUNNING":
-        counts.active += howMany;
+        counts.active += 1;
         break;
       case "SUCCEEDED":
-        counts.succeeded += howMany;
+        counts.succeeded += 1;
         break;
       case "FAILED":
-        counts.failed += howMany;
+        counts.failed += 1;
         break;
       case "CANCELLED":
-        counts.cancelled += howMany;
+        counts.cancelled += 1;
         break;
     }
   }
@@ -127,10 +133,17 @@ export function terminalStatusFor(
 }
 
 /**
- * Closes a run whose jobs have all finished.
+ * Settles a run: records what its jobs produced, and closes it when they are
+ * all finished.
  *
- * A no-op while any job is still PENDING or RUNNING, and a no-op on a run that
- * has already ended. Returns null only when the run does not exist.
+ * Counters are refreshed while the run is still going — a cycle that takes a
+ * while should report progress rather than showing zeroes until it ends — and
+ * they are written again, with the terminal status, by whichever caller
+ * finishes the run.
+ *
+ * A no-op on a run that has already ended: its numbers, like its status, are
+ * the record of what happened and are never rewritten. Returns null only when
+ * the run does not exist.
  */
 export async function settleDiscoveryRun(
   discoveryRunId: string,
@@ -144,10 +157,13 @@ export async function settleDiscoveryRun(
 
   if (run === null) return null;
 
-  const counts = await countRunJobs(discoveryRunId);
+  const jobs = await readRunJobs(discoveryRunId);
+  const counts = countJobs(jobs);
+  const counters = totalRunCounters(jobs);
 
   const base = {
     discoveryRunId,
+    counters,
     activeChildren: counts.active,
     children: counts.total,
   };
@@ -158,8 +174,14 @@ export async function settleDiscoveryRun(
   }
 
   // Work is still in flight. The next job to finish, or the reconciler, tries
-  // again; until then the run correctly reads as RUNNING.
+  // again; until then the run correctly reads as RUNNING. The counters are
+  // still refreshed, so an in-progress run reports the work done so far.
   if (counts.active > 0) {
+    await db.discoveryRun.updateMany({
+      where: { id: discoveryRunId, status: "RUNNING" },
+      data: counters,
+    });
+
     return { ...base, status: "RUNNING", settled: false };
   }
 
@@ -171,6 +193,8 @@ export async function settleDiscoveryRun(
   const { count } = await db.discoveryRun.updateMany({
     where: { id: discoveryRunId, status: "RUNNING" },
     data: {
+      // The run's own record of what it produced, from its own jobs.
+      ...counters,
       status: outcome,
       completedAt: now,
       // Failures are recorded, not swallowed: the run says why it failed, and

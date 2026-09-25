@@ -2,6 +2,8 @@ import type {
   DiscoveryContext,
   DiscoveryProvider,
   DiscoveryResult,
+  FetchedDocument,
+  Fetcher,
 } from "../provider";
 import { emptyResult } from "../provider";
 import { extractFacts, extractSitemapUrls, isSitemapIndex } from "../extract";
@@ -9,7 +11,7 @@ import { canonicalDomain } from "../canonical";
 import type { DiscoveredEntity } from "../ingest";
 
 /**
- * Website provider.
+ * Website reading.
  *
  * Given a business's own website, reads what the site publishes about itself.
  * It follows the layered priority the spec requires: try the structured,
@@ -23,6 +25,12 @@ import type { DiscoveredEntity } from "../ingest";
  * It never crawls a whole site: a handful of pages carry essentially all the
  * identifying information, and more requests would be a cost to the site owner
  * with no benefit.
+ *
+ * The page-acquisition half (`collectSitePages`) is exported because company
+ * research needs exactly the same behaviour — same sitemap guidance, same
+ * cross-site refusal, same access-control handling, same politeness. Two
+ * implementations of "fetch a company's own pages" would eventually disagree
+ * about what may be read, and that disagreement would be a privacy bug.
  */
 
 /** Paths most likely to carry contact details, in priority order. */
@@ -53,7 +61,7 @@ export const DEFAULT_MAX_PAGES = 5;
  * Protocol changes are allowed, but an explicitly supplied non-default port
  * must remain unchanged.
  */
-function siteUrl(raw: string, origin: string): URL | null {
+export function siteUrl(raw: string, origin: string): URL | null {
   let candidate: URL;
   let target: URL;
 
@@ -78,6 +86,91 @@ function siteUrl(raw: string, origin: string): URL | null {
 
 function isInformationPage(url: URL): boolean {
   return INFORMATION_PAGE_PATH.test(url.pathname);
+}
+
+/** Honest tallies of what a page-acquisition pass actually did. */
+export interface SiteTally {
+  pagesAttempted: number;
+  pagesSucceeded: number;
+  pagesFailed: number;
+  pagesBlocked: number;
+  warnings: string[];
+}
+
+/** A page that was fetched successfully and still belongs to the site. */
+export interface CollectedPage {
+  url: string;
+  document: FetchedDocument;
+}
+
+export interface SiteCollection extends SiteTally {
+  pages: CollectedPage[];
+}
+
+export interface CollectSitePagesOptions {
+  /** The site to read, as an origin such as `https://example.com`. */
+  origin: string;
+  fetcher: Fetcher;
+  maxPages?: number;
+  signal?: AbortSignal;
+}
+
+/**
+ * Fetches the pages a business publishes about itself.
+ *
+ * Everything it returns is evidence: a page in `pages` was served by the site
+ * itself and survived the same-site check. Blocked pages are counted and
+ * named, never worked around — a refusal is an answer.
+ */
+export async function collectSitePages(
+  options: CollectSitePagesOptions,
+): Promise<SiteCollection> {
+  const { origin, fetcher, signal } = options;
+  const maxPages = Math.max(1, options.maxPages ?? DEFAULT_MAX_PAGES);
+
+  const collection: SiteCollection = {
+    pages: [],
+    pagesAttempted: 0,
+    pagesSucceeded: 0,
+    pagesFailed: 0,
+    pagesBlocked: 0,
+    warnings: [],
+  };
+
+  const pages = await selectPages(fetcher, origin, maxPages, collection, signal);
+
+  for (const page of pages) {
+    if (signal?.aborted === true) break;
+
+    collection.pagesAttempted += 1;
+    const document = await fetcher.fetch(page);
+
+    if (document.outcome === "BLOCKED") {
+      // Recorded and skipped. One blocked page must not stop the run.
+      collection.pagesBlocked += 1;
+      collection.warnings.push(`Blocked: ${page}`);
+      continue;
+    }
+
+    if (document.outcome !== "SUCCESS" || typeof document.body !== "string") {
+      collection.pagesFailed += 1;
+      continue;
+    }
+
+    collection.pagesSucceeded += 1;
+
+    // A same-site URL may redirect to a third-party login, checkout or CDN.
+    // Reading it would attribute the third party's contact details to the
+    // requested business, so retain the fetch log but reject it as evidence.
+    if (siteUrl(document.url, origin) === null) {
+      collection.warnings.push(`Skipped cross-site response while inspecting ${page}`);
+      continue;
+    }
+
+    collection.pages.push({ url: document.url, document });
+  }
+
+  return collection;
 }
 
 export interface WebsiteProviderConfig {
@@ -144,40 +237,24 @@ async function inspectSite(
   // either a name or a domain. Dropping the site here would discard real data.
   const domain = canonicalDomain(origin);
 
-  const pages = await selectPages(context, origin, maxPages, result);
+  const collection = await collectSitePages({
+    origin,
+    fetcher: context.fetcher,
+    maxPages,
+    signal: context.signal,
+  });
+
+  result.pagesAttempted += collection.pagesAttempted;
+  result.pagesSucceeded += collection.pagesSucceeded;
+  result.pagesFailed += collection.pagesFailed;
+  result.pagesBlocked += collection.pagesBlocked;
+  result.warnings.push(...collection.warnings);
+
   const facts: DiscoveredEntity["facts"] = [];
-
-  for (const page of pages) {
-    if (context.signal?.aborted) break;
-
-    result.pagesAttempted += 1;
-    const document = await context.fetcher.fetch(page);
-
-    if (document.outcome === "BLOCKED") {
-      // Recorded and skipped. One blocked page must not stop the run.
-      result.pagesBlocked += 1;
-      result.warnings.push(`Blocked: ${page}`);
-      continue;
-    }
-
-    if (document.outcome !== "SUCCESS" || typeof document.body !== "string") {
-      result.pagesFailed += 1;
-      continue;
-    }
-
-    result.pagesSucceeded += 1;
-
-    // A same-site URL may redirect to a third-party login, checkout or CDN.
-    // Reading it would attribute the third party's contact details to the
-    // requested business, so retain the fetch log but reject it as evidence.
-    if (siteUrl(document.url, origin) === null) {
-      result.warnings.push(
-        `Skipped cross-site response while inspecting ${page}`,
-      );
-      continue;
-    }
-
-    facts.push(...extractFacts({ url: document.url, html: document.body }));
+  for (const page of collection.pages) {
+    facts.push(
+      ...extractFacts({ url: page.document.url, html: page.document.body ?? "" }),
+    );
   }
 
   if (facts.length === 0) return null;
@@ -236,38 +313,38 @@ function methodRank(method: string): number {
  * conventional paths when there is no sitemap.
  */
 async function selectPages(
-  context: DiscoveryContext,
+  fetcher: Fetcher,
   origin: string,
   maxPages: number,
-  result: DiscoveryResult,
+  tally: SiteTally,
+  signal?: AbortSignal,
 ): Promise<string[]> {
   const pages = [origin];
 
-  result.pagesAttempted += 1;
-  const sitemap = await context.fetcher.fetch(`${origin}/sitemap.xml`);
+  tally.pagesAttempted += 1;
+  const sitemap = await fetcher.fetch(`${origin}/sitemap.xml`);
 
   if (sitemap.outcome === "SUCCESS" && typeof sitemap.body === "string") {
-    result.pagesSucceeded += 1;
+    tally.pagesSucceeded += 1;
 
     // A sitemap index points at more sitemaps; read only the first to keep
     // the request budget small.
     let body = sitemap.body;
     if (isSitemapIndex(body)) {
       const first = extractSitemapUrls(body)[0];
-      const nestedUrl =
-        first === undefined ? null : siteUrl(first, origin);
+      const nestedUrl = first === undefined ? null : siteUrl(first, origin);
 
       if (first !== undefined && nestedUrl === null) {
-        result.warnings.push("Skipped cross-site sitemap index entry");
+        tally.warnings.push("Skipped cross-site sitemap index entry");
         body = "";
       } else if (nestedUrl !== null) {
-        result.pagesAttempted += 1;
-        const nested = await context.fetcher.fetch(nestedUrl.toString());
+        tally.pagesAttempted += 1;
+        const nested = await fetcher.fetch(nestedUrl.toString());
         if (nested.outcome === "SUCCESS" && typeof nested.body === "string") {
-          result.pagesSucceeded += 1;
+          tally.pagesSucceeded += 1;
           body = nested.body;
         } else {
-          result.pagesFailed += 1;
+          tally.pagesFailed += 1;
           body = "";
         }
       }
@@ -286,9 +363,9 @@ async function selectPages(
       }
     }
   } else if (sitemap.outcome === "BLOCKED") {
-    result.pagesBlocked += 1;
+    tally.pagesBlocked += 1;
   } else {
-    result.pagesFailed += 1;
+    tally.pagesFailed += 1;
   }
 
   // Fall back to conventional paths if the sitemap gave us nothing.
@@ -298,6 +375,10 @@ async function selectPages(
       pages.push(`${origin}${path}`);
     }
   }
+
+  // The signal is checked once more here because a slow sitemap fetch is the
+  // most likely moment for a stop request to arrive.
+  if (signal?.aborted === true) return pages.slice(0, 1);
 
   return pages.slice(0, maxPages);
 }

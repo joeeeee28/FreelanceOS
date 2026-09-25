@@ -342,14 +342,7 @@ async function applyFacts(args: ApplyFactsArgs): Promise<FieldOutcome[]> {
     const value = normaliseFieldValue(fact.field, fact.value);
     const confidence = clampConfidence(confidenceFor(fact.method));
     const observedAt = fact.observedAt ?? now;
-
-    // The strongest surviving observation for this field decides what the
-    // company currently holds and how strongly.
-    const held = await tx.observation.findFirst({
-      where: { companyId, field: fact.field, supersededAt: null, value: { not: null } },
-      orderBy: [{ confidence: "desc" }, { observedAt: "desc" }],
-      select: { id: true, confidence: true, observedAt: true, value: true },
-    });
+    const sourceUrl = fact.sourceUrl ?? null;
 
     const company = await tx.company.findUniqueOrThrow({
       where: { id: companyId },
@@ -358,6 +351,42 @@ async function applyFacts(args: ApplyFactsArgs): Promise<FieldOutcome[]> {
 
     const previousValue = (company as Record<string, unknown>)[fact.field];
     const previous = typeof previousValue === "string" ? previousValue : null;
+
+    // Re-observing an identical claim from the same place is not new evidence.
+    // A second identical crawl or research pass must not append a duplicate row
+    // for every fact, or the observation trail stops being a record of what
+    // changed and starts being a record of how often we looked. History stays
+    // append-only: a different value, method or source still gets its own row.
+    const identical = await tx.observation.findFirst({
+      where: {
+        companyId,
+        field: fact.field,
+        supersededAt: null,
+        method: fact.method as PrismaExtractionMethod,
+        sourceUrl,
+        value,
+      },
+      select: { id: true },
+    });
+
+    if (identical !== null) {
+      outcomes.push({
+        field: fact.field,
+        promoted: false,
+        reason: "ALREADY_OBSERVED",
+        previousValue: previous,
+        newValue: previous,
+      });
+      continue;
+    }
+
+    // The strongest surviving observation for this field decides what the
+    // company currently holds and how strongly.
+    const held = await tx.observation.findFirst({
+      where: { companyId, field: fact.field, supersededAt: null, value: { not: null } },
+      orderBy: [{ confidence: "desc" }, { observedAt: "desc" }],
+      select: { id: true, confidence: true, observedAt: true, value: true },
+    });
 
     const observation = await tx.observation.create({
       data: {
@@ -368,7 +397,7 @@ async function applyFacts(args: ApplyFactsArgs): Promise<FieldOutcome[]> {
         value,
         method: fact.method as PrismaExtractionMethod,
         confidence,
-        sourceUrl: fact.sourceUrl ?? null,
+        sourceUrl,
         evidence:
           typeof fact.evidence === "string" ? sanitiseEvidence(fact.evidence) : null,
         locator: fact.locator ?? null,

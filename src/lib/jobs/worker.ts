@@ -15,6 +15,8 @@ import { randomUUID } from "node:crypto";
 
 import type { JobType } from "@prisma/client";
 
+import { serialiseRunCounters } from "@/lib/discovery/run-counters";
+
 import { JOB_HANDLERS } from "./handlers";
 import {
   claimNextJob,
@@ -124,7 +126,16 @@ export async function runWorker(options: WorkerOptions = {}): Promise<WorkerStat
       });
 
       if (result.ok) {
-        await completeJob(job.id, { summary: result.summary, enqueued: result.enqueued ?? 0 });
+        await completeJob(job.id, {
+          summary: result.summary,
+          enqueued: result.enqueued ?? 0,
+          // The job's own record of what it produced. DiscoveryRun counters
+          // are aggregated from these, which is why they are stored on the
+          // job rather than incremented onto the run as work happens.
+          ...(result.counters === undefined
+            ? {}
+            : { counters: serialiseRunCounters(result.counters) }),
+        });
         stats.completed += 1;
         options.onEvent?.({
           kind: "COMPLETED",

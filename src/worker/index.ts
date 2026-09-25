@@ -9,7 +9,11 @@
  * Run with: npm run worker
  */
 
-import { decideSchedule, type ScheduleState } from "@/lib/discovery/scheduler";
+import {
+  decideSchedule,
+  discoveryCycleKey,
+  type ScheduleState,
+} from "@/lib/discovery/scheduler";
 import { reconcileDiscoveryRuns } from "@/lib/discovery/runs";
 import { db } from "@/lib/db-client";
 import { enqueueJob } from "@/lib/jobs/queue";
@@ -43,6 +47,8 @@ function describe(event: WorkerEvent): string | null {
  * single global cron would run everyone's crawl at the owner's midnight.
  */
 async function enqueueDueCycles(): Promise<number> {
+  const now = new Date();
+
   const workspaces = await db.workspace.findMany({
     select: { id: true, timezone: true },
   });
@@ -50,6 +56,8 @@ async function enqueueDueCycles(): Promise<number> {
   let queued = 0;
 
   for (const workspace of workspaces) {
+    const timezone = workspace.timezone ?? "UTC";
+
     const lastRun = await db.discoveryRun.findFirst({
       where: { workspaceId: workspace.id },
       orderBy: { startedAt: "desc" },
@@ -62,25 +70,24 @@ async function enqueueDueCycles(): Promise<number> {
       running: lastRun?.status === "RUNNING",
     };
 
-    const decision = decideSchedule(
-      { timezone: workspace.timezone ?? "UTC" },
-      state,
-    );
+    const decision = decideSchedule({ timezone }, state, now);
 
     if (decision.action === "WAIT") continue;
 
-    // The idempotency key is the slot, so several workers polling at once
-    // cannot queue the same cycle twice.
-    const slot = decision.scheduledFor.toISOString().slice(0, 13);
+    // The idempotency key is the workspace's own local slot, so several
+    // workers polling at once cannot queue the same cycle twice, two
+    // workspaces in different zones cannot collide, and a half-hour offset
+    // cannot produce two keys for one slot.
+    const key = discoveryCycleKey(workspace.id, timezone, decision, now);
 
     await enqueueJob({
       workspaceId: workspace.id,
       type: "DISCOVERY_RUN",
-      idempotencyKey: `cycle:${slot}`,
+      idempotencyKey: key,
       priority: 50,
     });
 
-    log(`queued discovery cycle for workspace ${workspace.id} (${decision.reason})`);
+    log(`queued discovery cycle for workspace ${workspace.id} (${key}, ${decision.reason})`);
     queued += 1;
   }
 
