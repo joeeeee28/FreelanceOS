@@ -48,7 +48,7 @@ Checks and rules:
 - **Never** run `prisma migrate reset`, `DROP DATABASE`, `DROP SCHEMA` or
   `TRUNCATE` against production.
 - Verify the result is `SCHEMA_MATCHES_MIGRATION ✓` before proceeding.
-- Confirm the expected object counts (current baseline: 24 tables, 111
+- Confirm the expected object counts (current baseline: 24 tables, 110
   indexes, 42 foreign keys, 21 enums).
 - Migrations are forward-only. A bad migration is corrected by a **new**
   migration, not by editing an applied one.

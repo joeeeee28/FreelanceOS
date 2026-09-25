@@ -52,6 +52,27 @@ export function isIgnoredHost(domain: string): boolean {
   );
 }
 
+/**
+ * Package registries prove where a repository is published, not which
+ * business owns it. They are excluded only from repository-homepage discovery;
+ * they remain valid direct website/knowledge sources when deliberately chosen.
+ */
+const PACKAGE_REGISTRY_HOSTS = [
+  "npmjs.com",
+  "pypi.org",
+  "rubygems.org",
+  "crates.io",
+  "packagist.org",
+  "nuget.org",
+  "jsr.io",
+];
+
+function isPackageRegistryHost(domain: string): boolean {
+  return PACKAGE_REGISTRY_HOSTS.some(
+    (registry) => domain === registry || domain.endsWith(`.${registry}`),
+  );
+}
+
 export interface DirectoryProviderConfig {
   urls?: string[];
   maxPages?: number;
@@ -263,7 +284,12 @@ export const repositoryProvider: DiscoveryProvider = {
         if (key === null) continue;
 
         const domain = canonicalDomain(homepage);
-        if (domain !== null && isIgnoredHost(domain)) continue;
+        if (
+          domain !== null &&
+          (isIgnoredHost(domain) || isPackageRegistryHost(domain))
+        ) {
+          continue;
+        }
         if (seen.has(key)) continue;
 
         seen.add(key);
@@ -275,16 +301,15 @@ export const repositoryProvider: DiscoveryProvider = {
           continue;
         }
 
-        const owner = repo.owner as Record<string, unknown> | undefined;
-        const name =
-          typeof owner?.login === "string"
-            ? owner.login
-            : typeof repo.name === "string"
-              ? repo.name
-              : null;
-
+        // A repository's owner is not evidence that it owns the homepage.
+        // Open-source organisations often host repositories for independent
+        // products, package-registry entries, or partner projects. Retaining
+        // that owner as the company name would create a plausible but false
+        // identity and could cause an unsafe name-based merge. The advertised
+        // homepage domain is sufficient as a candidate identity; a later
+        // first-party source can add a name with provenance.
         const entity: DiscoveredEntity = {
-          identity: { name, website: origin, domain: canonicalDomain(origin) },
+          identity: { name: null, website: origin, domain: canonicalDomain(origin) },
           facts: [
             {
               field: "website",

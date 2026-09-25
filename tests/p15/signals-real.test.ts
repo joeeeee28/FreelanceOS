@@ -36,7 +36,7 @@ afterAll(async () => {
 });
 
 describe("signals from a really fetched page", () => {
-  it("reads a real website and derives signals and opportunities", async () => {
+  it("reads a real website without claiming third-party ownership", async () => {
     const source = await db.source.create({
       data: {
         workspaceId: ws.workspaceId,
@@ -136,6 +136,29 @@ describe("signals from a really fetched page", () => {
     // The page must genuinely have been read; otherwise this proves nothing.
     expect(run.pagesSucceeded).toBeGreaterThan(0);
     expect(companies.length).toBeGreaterThan(0);
+
+    // Regression protection for the prior live-data defect: PyPI contained a
+    // sponsor URL for Meta and a package-page link to Odoo Community support.
+    // Neither is a PyPI-owned profile/contact, so they must never be promoted
+    // into the PyPI company record. The source-host assertion also protects
+    // against future cross-site redirects being treated as evidence.
+    const allObservations = companies.flatMap((company) => company.observations);
+    expect(allObservations.some((o) => o.value === "support@odoo-community.org")).toBe(
+      false,
+    );
+    expect(
+      allObservations.some(
+        (o) => o.value?.includes("about.facebook.com/meta") ?? false,
+      ),
+    ).toBe(false);
+    for (const observation of allObservations) {
+      expect(observation.sourceUrl).not.toBeNull();
+      if (observation.sourceUrl !== null) {
+        expect(new URL(observation.sourceUrl).hostname).toMatch(
+          /^(www\.)?pypi\.org$/,
+        );
+      }
+    }
 
     // §14: any signal that did fire must carry complete evidence.
     for (const s of storedSignals) {

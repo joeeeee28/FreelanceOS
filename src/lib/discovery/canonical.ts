@@ -15,10 +15,11 @@
  * Multi-part public suffixes we must not mistake for a registrable domain.
  *
  * This is intentionally a short, explicit list rather than a bundled copy of
- * the full Public Suffix List: it covers the common commercial cases, needs no
- * dependency and no network fetch, and anything it misses degrades gracefully
- * (we keep one label too many, which is conservative — it can only prevent a
- * merge, never cause a wrong one).
+ * the full Public Suffix List: it covers the common commercial cases and
+ * important multi-tenant hosting domains, needs no dependency and no network
+ * fetch, and anything it misses degrades gracefully (we keep one label too
+ * many, which is conservative — it can only prevent a merge, never cause a
+ * wrong one).
  */
 const MULTI_PART_SUFFIXES = new Set([
   "co.uk", "org.uk", "me.uk", "ac.uk", "gov.uk", "net.uk", "sch.uk",
@@ -60,6 +61,12 @@ const MULTI_PART_SUFFIXES = new Set([
   "com.ec", "net.ec",
   "com.uy", "net.uy",
   "com.do", "com.gt", "com.sv", "com.hn", "com.ni", "com.pa",
+
+  // Multi-tenant application hosts. Treat their customer subdomains as
+  // distinct registrable identities so a crawler can never merge two tenants.
+  "github.io", "gitlab.io", "bitbucket.io",
+  "vercel.app", "vercel.sh", "netlify.app", "pages.dev", "workers.dev",
+  "web.app", "firebaseapp.com", "surge.sh", "fly.dev", "onrender.com",
 ]);
 
 /** Subdomains that never distinguish one business from another. */

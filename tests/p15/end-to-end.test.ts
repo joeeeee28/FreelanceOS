@@ -309,21 +309,41 @@ describe("§25 data quality: inspect real records individually", () => {
         observations: c.observations.length,
         signals: c.signals.length,
         opportunities: c.opportunities.length,
-        classification: hasProvenance ? "CORRECT" : "UNVERIFIED",
+        // Automated validation can prove lineage and field shape, not that an
+        // arbitrary public source's business interpretation is correct. The
+        // latter is reported only after a separately documented manual audit.
+        classification: hasProvenance ? "PROVENANCE_VERIFIED" : "UNVERIFIED",
       };
     });
 
     report.dataQualityAudit = audit;
     report.dataQualityCounts = {
       inspected: audit.length,
-      correct: audit.filter((a) => a.classification === "CORRECT").length,
-      unverified: audit.filter((a) => a.classification !== "CORRECT").length,
+      provenanceVerified: audit.filter(
+        (a) => a.classification === "PROVENANCE_VERIFIED",
+      ).length,
+      unverified: audit.filter((a) => a.classification === "UNVERIFIED").length,
     };
 
     expect(companies.length).toBeGreaterThan(0);
+    // Package-registry URLs describe a package's publication location, not a
+    // business prospect; the repository provider must filter them.
+    expect(companies.some((c) => c.canonicalDomain === "npmjs.com")).toBe(false);
+
     for (const c of companies) {
       // Identity: a company must be identifiable, never a blank shell.
       expect(c.name ?? c.canonicalDomain).toBeTruthy();
+
+      const repositoryHomepageOnly = c.observations.every(
+        (o) => o.locator === "repo:homepage",
+      );
+      if (repositoryHomepageOnly) {
+        // A GitHub owner can maintain independent products. In this controlled
+        // run the source publishes only a homepage, so it must not invent an
+        // owner name for that homepage.
+        expect(c.name).toBe(c.canonicalDomain);
+      }
+
       for (const o of c.observations) {
         expect(o.sourceUrl).toBeTruthy();
         expect(o.observedAt).toBeTruthy();

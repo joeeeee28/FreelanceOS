@@ -30,7 +30,7 @@ async function main() {
       throw new Error("INTENTIONAL_TEST_FAILURE");
     });
     assert(false, "Transaction unexpectedly succeeded");
-  } catch (e) {
+  } catch {
     // expected
   }
 

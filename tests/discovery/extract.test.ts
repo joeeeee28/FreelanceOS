@@ -142,6 +142,34 @@ describe("extractFacts", () => {
     expect(byField.get("youtubeUrl")).toContain("youtube.com");
   });
 
+  it("requires an explicit ownership label before accepting a markup social link", () => {
+    const facts = extractFacts({
+      url: URL,
+      html: `<html><head><title>Acme</title></head><body>
+        <a href="https://www.facebook.com/acme" aria-label="Follow Acme on Facebook">
+          <svg aria-hidden="true"></svg>
+        </a>
+      </body></html>`,
+    });
+
+    expect(facts.find((f) => f.field === "facebookUrl")?.value).toBe(
+      "https://www.facebook.com/acme",
+    );
+  });
+
+  it("does not treat an arbitrary third-party social URL as the site's profile", () => {
+    const facts = extractFacts({
+      url: URL,
+      html: `<html><head><title>Marketplace</title></head><body>
+        <a class="sponsor" href="https://about.facebook.com/meta/">
+          Sponsored by Meta
+        </a>
+      </body></html>`,
+    });
+
+    expect(facts.find((f) => f.field === "facebookUrl")).toBeUndefined();
+  });
+
   it("ignores non-business structured data", () => {
     const facts = extractFacts({
       url: URL,
