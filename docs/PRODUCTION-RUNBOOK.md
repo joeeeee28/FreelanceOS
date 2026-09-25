@@ -89,6 +89,28 @@ worker instances may run concurrently: job claiming uses
 `SELECT ... FOR UPDATE SKIP LOCKED`, which has been verified under 12
 simultaneous claimants to never hand the same job to two workers.
 
+### Instance topology and rate limiting (single-instance constraint)
+
+The web service's brute-force protection (`POST /api/auth/login`: 20 requests /
+10 min per IP and 10 / 10 min per email; `POST /api/setup`: 5 / 10 min per IP)
+is a **process-local in-memory limiter** (`src/lib/security/rate-limiter.ts`).
+That is correct for a **single application instance**, which is what
+`render.yaml` provisions — but it is not a global limit.
+
+- Run **exactly one** web instance in this topology. With two or more
+  instances each keeps its own counters, so an attacker's effective allowance
+  multiplies by the instance count.
+- Before scaling the web service horizontally, add a shared rate-limit store
+  (Redis, or a database-backed counter) or deliberately pin the service to a
+  single instance. Scaling out without it silently weakens login/setup
+  throttling.
+- A limiter entry is only replaced when the same key is used again, so a client
+  presenting many distinct keys (IPs/emails) accumulates keys in memory for the
+  life of the process. Acceptable for a single-user deployment; revisit before
+  exposing the login route to broad untrusted traffic.
+- Worker scaling is unaffected: job claiming is database-serialised
+  (`FOR UPDATE SKIP LOCKED`), so multiple worker instances remain safe.
+
 > **Deployment prerequisite — currently unmet in the validation sandbox.**
 > Prisma's native query engine for the target platform
 > (`debian-openssl-3.0.x`) must be downloadable at install time from
@@ -184,6 +206,8 @@ soft-deleted (`deletedAt`) and restorable through the UI.
 - [ ] `AUTH_SECRET` is ≥32 random characters and newly generated for production
 - [ ] `DIRECT_URL` is set and unpooled; `PRISMA_SCHEMA_ENGINE_BINARY` is unset
 - [ ] Prisma native engine downloads successfully on the target platform
+- [ ] Rate limiting: exactly one web instance is provisioned, or a shared
+      rate-limit store is configured (§3)
 - [ ] Migration parity verified against the production database
 - [ ] Production scanning/scheduling remains disabled
 - [ ] No `.env` file and no secret values committed
