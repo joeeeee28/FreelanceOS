@@ -466,3 +466,246 @@ response, and dependency vulnerabilities remain. Therefore the only factual
 P15 conclusion is:
 
 > **FreelanceOS is not production-ready. P15 stops here; P16 has not begun.**
+
+---
+
+# P15.1 — Remediation and revalidation (2026-09-26, Asia/Kolkata)
+
+> **P15.1 decision: NOT PRODUCTION-READY — DO NOT DEPLOY.**
+>
+> P15.1 was limited to closing and revalidating P15 gates. It did not begin
+> P16, deploy an application, access Supabase or other production data, enable
+> a scheduler, widen crawling, or enable outbound messaging.
+
+## P15.1.1 Repository provenance and scope reconciliation
+
+The reported short SHA `c6aba29` remains unavailable. It was checked in local
+refs/reflogs/object storage, the configured remote, and GitHub's public commit
+API; the API returned `422 No commit found for SHA: c6aba29`. It is therefore
+**not** represented as an existing commit or fabricated into history.
+
+The preserved 15-file P15 delta was archived before reconciliation
+(`c6-working-tree-delta.tgz`, SHA-256
+`74a00bbe8eab600ccb0d1320775286deadd9d014210d933b0414924196d0b6c5`), then the
+Arena branch ref was fast-forwarded only from the supplied baseline lineage to
+its legitimate descendant `d868556`. The unchanged preserved worktree delta
+was committed transparently as:
+
+```text
+6ff49ed P15: restore preserved attribution hardening
+parent: d868556 P15: validation report and production runbook (prepared, not deployed)
+```
+
+No reset, checkout overwrite, force-push, history rewrite, deployment, or
+production connection was used. P15.1 changes are confined to validation,
+documentation, and a compatible dependency security override; no product or
+business feature was added.
+
+## P15.1.2 Prisma, clean local PostgreSQL, and normal-runtime recheck
+
+A clean disposable embedded PostgreSQL **16.14** cluster was started for this
+revalidation at `127.0.0.1:55432`. It contains only validation data and lives
+outside the repository. `npm run prisma:parity` replayed all committed migration
+SQL into a fresh scratch database and passed:
+
+```text
+SCHEMA_MATCHES_MIGRATION ✓  (migration SQL reproduces schema.prisma exactly)
+```
+
+This is strong **LOCAL POSTGRESQL ARTIFACT** evidence, but it is not a claim
+that Prisma's normal migration engine ran.
+
+The exact normal, committed Prisma 6.19.3 commands were re-run against that
+clean disposable database with valid `DATABASE_URL` and `DIRECT_URL`:
+
+| Normal command | Result |
+|---|---|
+| `npx prisma validate` | **BLOCKED** before validation |
+| `npx prisma generate` | **BLOCKED** before client generation |
+| `npx prisma migrate deploy` | **BLOCKED** before database migration work |
+
+All three failed on the same required Prisma schema-engine artifact request:
+
+```text
+https://binaries.prisma.sh/all_commits/c2990dca591cba766e3b7ef5d9e8a84796e47ab7/debian-openssl-3.0.x/schema-engine.gz.sha256
+Client network socket disconnected before secure TLS connection was established
+```
+
+DNS resolution, OS CA use, and IPv4-oriented checks had already been attempted;
+the repeat confirms an **ENVIRONMENT / PRISMA ARTIFACT-EGRESS BLOCKER**, not a
+schema, migration, credential, or local-PostgreSQL defect. No stubbed engine,
+WASM replacement, adapter substitution, or fake success was used for these
+normal commands.
+
+A normal `next dev` process was also started against the clean local database.
+`GET /api/health` returned **200**; `GET /api/init-status` and `GET /` returned
+**500** because the normal client is still ungenerated:
+
+```text
+@prisma/client did not initialize yet. Please run "prisma generate" and try to import it again.
+```
+
+`npm run worker` was also invoked normally and exited before job processing
+with `Cannot find module '.prisma/client/default'` through `src/lib/db-client.ts`.
+Thus authenticated CRM, normal persistence, normal worker, and normal
+application-runtime smoke remain **BLOCKED**, not passed. The test-adapter
+results below are deliberately labelled separately.
+
+## P15.1.3 Database-backed integration, history, worker, and safety results
+
+**LOCAL FIXTURE / TEST-ADAPTER, backed by the disposable native PostgreSQL
+cluster:** `npm test` completed **44 files / 798 tests passed** in **201.09 s**.
+The generated client derives from the committed schema and uses the existing
+narrow test-only driver-adapter alias; it is not the normal application client.
+
+The full live P15 config was then re-run against the same disposable database:
+
+```text
+npx vitest run --config vitest.p15.config.ts
+10 files / 60 tests passed in 50.24 s
+```
+
+That re-run includes authenticated CRM server actions, workspace isolation,
+additive discovery, two-cycle idempotency, historical-observation preservation,
+queue leasing/recovery/heartbeat/crash handling, dashboard reads, robots,
+SSRF, real-source validation, and the P15.1 suites below. It is valid SQL
+integration evidence, but it does **not** remove the normal-Prisma runtime
+blocker.
+
+### Service-catalog evidence coverage — controlled SQL validation
+
+`tests/p15/service-catalog-coverage.test.ts` uses explicit, controlled facts
+rather than claiming fabricated live prospects. It persisted **11 signals** and
+**6 opportunities** through the real signal-storage path, verified explained
+rationales and linked signals, confirmed no automatic CRM lead, and simulated a
+factual change. The old `WEBSITE_OUTDATED` signal was marked `RESOLVED` rather
+than deleted; its `firstSeenAt` and row count were preserved.
+
+All **11/11** catalog services have an evidence-bearing signal → mapping →
+rationale path. Five services (`LANDING_PAGE`, `CONTENT_CREATION`,
+`SOCIAL_CONTENT`, `GRAPHICS_POSTERS`, `YOUTUBE_THUMBNAILS`) fell below the
+existing production 20-point anti-noise display threshold for the one concrete
+signal supplied, so P15.1 did **not** manufacture or persist weak
+opportunities merely to inflate coverage. Their explainable mapping coverage
+was audited without lowering the production threshold.
+
+## P15.1.4 Revalidated real-public-source and data-quality evidence
+
+Unauthenticated public GitHub access is available again. The exact previously
+blocked P15 live suite was re-run rather than waived, and all live tests
+passed. `api.github.com` returned successful public responses for `/zen`, a
+repository read, a bounded repository search, and the Vercel organization
+repository endpoint. GitHub is therefore no longer listed as a current
+P15.1 external-source blocker.
+
+`tests/p15/multi-source-records.test.ts` performed a small, descriptive,
+robots-aware, rate-limited validation only:
+
+| Public source/control | Result |
+|---|---|
+| GitHub public repository search, 20-item bounded payload | 13 attributed candidate Companies retained |
+| GitHub Vercel-org repository payload, bounded to 30 items | 6 attributed candidate Companies retained |
+| First-party `https://pypi.org` website-provider read | 1 Company with four first-party meta facts; 5 attempted / 3 succeeded / 2 failed pages |
+| Repeat of GitHub search | 0 Companies created; 13 matched; observations remained append-only |
+| npm registry public metadata control | 5 package records read and **not** ingested as Company/Lead records |
+
+This produced **20 persisted candidate records**, each with nonzero confidence,
+source URL, extraction method, locator, evidence, timestamp, and a unique
+canonical domain. All repository-derived records retained only the advertised
+homepage-domain identity (`name === canonicalDomain`) and `repo:homepage`
+provenance; no GitHub owner/repository ownership inference was made. No
+package-registry homepage entered repository discovery. **0 CRM leads** were
+created automatically.
+
+This is a bounded source-attribution assessment, not a claim that the 20
+technical domains are verified businesses, decision makers, official social
+profiles, or worthwhile prospects. Human relevance review remains required
+before any explicit CRM sync or outreach.
+
+## P15.1.5 Security review and dependency remediation
+
+### Security review — PASS within the tested code scope
+
+The review repeated the security-oriented suite and a targeted static audit:
+
+- **43** discovery network-target/SSRF tests and **13** P15 SSRF tests passed.
+  The crawler rejects loopback, private, link-local, cloud-metadata,
+  non-public-hostname, malformed, unsupported-scheme, and redirect-hop targets;
+  robots restrictions remain recorded rather than bypassed.
+- Session hashing/revocation, malformed/tampered/expired-token handling,
+  logout, setup/password validation, safe client-facing errors, workspace
+  isolation, and CRM cross-workspace refusal are covered in the passing suite.
+- No tracked secret/credential file was found; `.env`, `.env.local`, and the
+  generated test client are ignored. The only string-pattern hit was an
+  intentional test password fixture.
+- No `eval`, dynamic `Function`, `dangerouslySetInnerHTML`,
+  `$queryRawUnsafe`, or `$executeRawUnsafe` use was found. The sole application
+  raw query is parameterised `Prisma.sql` for `FOR UPDATE SKIP LOCKED` queue
+  claiming. `child_process` use is limited to test-client tooling.
+
+Operational caveat: the current login/setup limiter is deliberately
+in-memory/per-process. A multi-instance production deployment needs a shared
+rate-limit store or a documented single-instance boundary; P15.1 did not add
+infrastructure or weaken the existing controls.
+
+### Dependency remediation — PARTIAL PASS
+
+A compatible, reviewed override now deduplicates Next.js's nested vulnerable
+PostCSS 8.4.31 to the already direct, exact `postcss@8.5.28`:
+
+```json
+"overrides": { "postcss": "$postcss" }
+```
+
+`npm ci`, `npm ls postcss`, lint, the full fixture suite, and the full live P15
+suite all passed after this change. `npm audit --json` fell from **7** findings
+(3 moderate, 4 high) to **5** (2 moderate, 3 high), with no critical finding.
+The remaining advisory paths are Prisma CLI/config → `deepmerge-ts` and
+Vitest → `@vitest/mocker`; npm's offered fixes require incompatible/major (and
+for Prisma, anomalous downgrade) changes. They were not applied blindly.
+
+## P15.1.6 Quality gates and UAT status
+
+| Gate | P15.1 result |
+|---|---|
+| `npm ci` | **PASS** |
+| `npm run lint` | **PASS** |
+| `npm test` | **PASS — 44 files / 798 tests** (test adapter / disposable PostgreSQL) |
+| Full P15 live suite | **PASS — 10 files / 60 tests** (test adapter / disposable PostgreSQL plus real public sources) |
+| `npm run prisma:parity` | **PASS** (migration artifact parity) |
+| `npx prisma validate/generate/migrate deploy` | **BLOCKED** — Prisma artifact egress before substantive work |
+| `npm run typecheck` | **BLOCKED** — 133 TypeScript diagnostic lines cascade from ungenerated normal Prisma types |
+| `npm run build` | **BLOCKED** — mandatory initial `prisma generate` hits the same artifact egress failure |
+| Normal DB-backed app/worker smoke | **BLOCKED** — normal client ungenerated; DB routes return 500 |
+| Browser/UAT | **BLOCKED** — no Chromium/Chrome/Firefox or Playwright/Puppeteer available; normal DB/auth path is also blocked |
+
+The production runbook was reviewed and requires no procedural change: it
+already forbids the test-engine stub in production and makes a successful
+normal Prisma engine download a deployment prerequisite. It was therefore not
+edited merely to record a transient sandbox condition.
+
+## P15.1.7 Remaining mandatory gates and final readiness decision
+
+The following are genuine unresolved blockers; no other area is being claimed
+as blocked:
+
+1. **Prisma engine artifact access:** in an environment that can reach
+   `binaries.prisma.sh`, run normal `prisma generate`, `prisma validate`, and
+   `prisma migrate deploy` against a clean non-production database.
+2. **Normal quality/runtime gates:** after normal generation, run typecheck and
+   build, then normal-client authenticated CRM, persistence, worker, discovery,
+   and two-cycle smoke tests. Current normal DB-backed routes are proven 500.
+3. **Browser UAT:** provision a real browser and exercise login/setup, forms,
+   responsive layouts, client-side interactions, error paths, logout, and
+   session expiry using the normal generated client.
+4. **Remaining dependency advisories:** explicitly assess compatible Prisma and
+   Vitest upgrade paths; do not use a forced, breaking audit fix. Configure a
+   shared limiter if deploying more than one application instance.
+
+The prior GitHub/API, live-suite, 20-record controlled data-quality, service
+mapping, local SQL, historical-change, worker, and security validation gates
+were revalidated successfully within their stated scope. They do not outweigh
+the normal Prisma/runtime/build/browser blockers.
+
+> **FreelanceOS remains NOT PRODUCTION-READY. Do not deploy. P15.1 stops here;
+> P16 has not begun.**
