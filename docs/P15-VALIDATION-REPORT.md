@@ -524,10 +524,13 @@ clean disposable database with valid `DATABASE_URL` and `DIRECT_URL`:
 | `npx prisma generate` | **BLOCKED** before client generation |
 | `npx prisma migrate deploy` | **BLOCKED** before database migration work |
 
-All three failed on the same required Prisma schema-engine artifact request:
+Each failed while retrieving Prisma's required schema-engine artifact from the
+same engine commit/target, before schema or database work. The final repeat
+requested `schema-engine.sha256` for validate/generate and
+`schema-engine.gz.sha256` for migrate deploy:
 
 ```text
-https://binaries.prisma.sh/all_commits/c2990dca591cba766e3b7ef5d9e8a84796e47ab7/debian-openssl-3.0.x/schema-engine.gz.sha256
+https://binaries.prisma.sh/all_commits/c2990dca591cba766e3b7ef5d9e8a84796e47ab7/debian-openssl-3.0.x/schema-engine[.gz].sha256
 Client network socket disconnected before secure TLS connection was established
 ```
 
@@ -554,7 +557,7 @@ results below are deliberately labelled separately.
 ## P15.1.3 Database-backed integration, history, worker, and safety results
 
 **LOCAL FIXTURE / TEST-ADAPTER, backed by the disposable native PostgreSQL
-cluster:** `npm test` completed **44 files / 798 tests passed** in **201.09 s**.
+cluster:** `npm test` completed **44 files / 798 tests passed** in **195.75 s**.
 The generated client derives from the committed schema and uses the existing
 narrow test-only driver-adapter alias; it is not the normal application client.
 
@@ -562,7 +565,7 @@ The full live P15 config was then re-run against the same disposable database:
 
 ```text
 npx vitest run --config vitest.p15.config.ts
-10 files / 60 tests passed in 50.24 s
+10 files / 60 tests passed in 49.46 s
 ```
 
 That re-run includes authenticated CRM server actions, workspace isolation,
@@ -651,13 +654,15 @@ infrastructure or weaken the existing controls.
 ### Dependency remediation — PARTIAL PASS
 
 A compatible, reviewed override now deduplicates Next.js's nested vulnerable
-PostCSS 8.4.31 to the already direct, exact `postcss@8.5.28`:
+PostCSS 8.4.31 to the exact `postcss@8.5.28`, retained as a production
+dependency so a production-only install still satisfies Next.js's dependency:
 
 ```json
 "overrides": { "postcss": "$postcss" }
 ```
 
-`npm ci`, `npm ls postcss`, lint, the full fixture suite, and the full live P15
+`npm ci`, a clean `npm ci --omit=dev` dependency check (including Next.js's CSS
+module), `npm ls postcss`, lint, the full fixture suite, and the full live P15
 suite all passed after this change. `npm audit --json` fell from **7** findings
 (3 moderate, 4 high) to **5** (2 moderate, 3 high), with no critical finding.
 The remaining advisory paths are Prisma CLI/config → `deepmerge-ts` and
