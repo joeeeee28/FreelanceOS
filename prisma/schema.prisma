@@ -32,6 +32,19 @@ model Workspace {
   activities Activity[]
   tasks      Task[]
   followUps  FollowUp[]
+
+  companies     Company[]
+  sources       Source[]
+  observations  Observation[]
+  signals       Signal[]
+  opportunities Opportunity[]
+  discoveryRuns DiscoveryRun[]
+  jobs          Job[]
+
+  researchRuns       ResearchRun[]
+  discoveredContacts DiscoveredContact[]
+  knowledgeResources KnowledgeResource[]
+  knowledgeTopics    KnowledgeTopic[]
 }
 
 model Setting {
@@ -62,9 +75,15 @@ model User {
 }
 
 model Session {
-  id        String   @id @default(cuid())
-  userId    String
-  token     String   @unique
+  id String @id @default(cuid())
+
+  userId String
+
+  /// SHA-256 digest of the session bearer token. The raw token is only ever
+  /// held by the browser in an HTTP-only cookie and is never persisted, so a
+  /// read-only disclosure of this table yields no usable credentials.
+  tokenHash String @unique
+
   expiresAt DateTime
   createdAt DateTime @default(now())
 
@@ -158,6 +177,10 @@ model Lead {
   id          String @id @default(cuid())
   workspaceId String
 
+  /// Optional link to the canonical Company. Null for leads entered by hand
+  /// before/without discovery; a Lead is a *pursued* Company.
+  companyId String?
+
   companyName String
   contactName String?
 
@@ -196,6 +219,7 @@ model Lead {
   updatedAt DateTime @updatedAt
 
   workspace  Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  company    Company?   @relation(fields: [companyId], references: [id], onDelete: SetNull)
   contacts   Contact[]
   activities Activity[]
   tasks      Task[]
@@ -206,6 +230,7 @@ model Lead {
   @@index([workspaceId, score])
   @@index([workspaceId, createdAt])
   @@index([workspaceId, deletedAt])
+  @@index([workspaceId, companyId])
 }
 
 model Contact {
@@ -254,13 +279,15 @@ model Activity {
   description String?
   metadata    Json?
 
-  createdByUserId String
+  // Null means the entry was written by the discovery engine rather than a
+  // person. Human-created activity always carries its author.
+  createdByUserId String?
   createdAt       DateTime @default(now())
 
   workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   lead          Lead?     @relation(fields: [leadId], references: [id], onDelete: Cascade)
   contact       Contact?  @relation(fields: [contactId], references: [id], onDelete: SetNull)
-  createdByUser User      @relation(fields: [createdByUserId], references: [id], onDelete: Restrict)
+  createdByUser User?     @relation(fields: [createdByUserId], references: [id], onDelete: Restrict)
 
   @@index([workspaceId])
   @@index([workspaceId, createdAt])
@@ -330,4 +357,707 @@ model FollowUp {
   @@index([workspaceId, scheduledAt])
   @@index([leadId])
   @@index([contactId])
+}
+
+// ===========================================================================
+// DISCOVERY & INTELLIGENCE
+//
+// These models sit *around* the CRM, not inside it. Every existing CRM table
+// keeps its shape; Lead simply gains an optional link to a Company.
+//
+// Core invariant: the discovery engine may only INSERT observations and
+// INSERT/UPDATE derived records. It has no delete path. Superseded facts are
+// stamped, never removed, so business history is permanent.
+// ===========================================================================
+
+/// How a fact was extracted. Determines its confidence; see
+/// src/lib/discovery/provenance.ts for the authoritative scale.
+enum ExtractionMethod {
+  MANUAL
+  STRUCTURED_DATA
+  HTTP_HEADER
+  SITEMAP
+  FEED
+  META_TAG
+  HTML_SELECTOR
+  TEXT_HEURISTIC
+  INFERRED
+}
+
+/// Outcome of touching a source. BLOCKED is recorded and respected — the
+/// engine never attempts to circumvent an explicit access control.
+enum FetchOutcome {
+  SUCCESS
+  NOT_FOUND
+  TIMEOUT
+  NETWORK_ERROR
+  PARSE_ERROR
+  BLOCKED
+  RATE_LIMITED
+  SERVER_ERROR
+}
+
+enum SourceStatus {
+  ACTIVE
+  PAUSED
+  FAILING
+  BLOCKED
+}
+
+enum SignalType {
+  WEBSITE_MISSING
+  WEBSITE_OUTDATED
+  WEBSITE_QUALITY_ISSUE
+  NEW_WEBSITE
+  MARKETING_ACTIVITY
+  ADVERTISING_ACTIVITY
+  CONTENT_ACTIVITY
+  LOW_CONTENT_ACTIVITY
+  HIRING_SIGNAL
+  MARKETING_JOB
+  SOCIAL_MEDIA_ACTIVITY
+  SOCIAL_MEDIA_ABSENT
+  NEW_LOCATION
+  BUSINESS_EXPANSION
+  NEW_PRODUCT
+  TECHNOLOGY_CHANGE
+  LEADERSHIP_CHANGE
+  DECISION_MAKER_FOUND
+  LANDING_PAGE_OPPORTUNITY
+  CONTENT_OPPORTUNITY
+  SOCIAL_MEDIA_OPPORTUNITY
+  OTHER
+}
+
+enum SignalStatus {
+  ACTIVE
+  STALE
+  RESOLVED
+  DISMISSED
+}
+
+enum OpportunityStatus {
+  OPEN
+  PURSUED
+  WON
+  LOST
+  DISMISSED
+}
+
+/// Fuzzy matches never merge automatically; they wait for a human.
+enum ResolutionState {
+  RESOLVED
+  NEEDS_REVIEW
+  REJECTED
+}
+
+enum JobStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+enum JobType {
+  DISCOVERY_RUN
+  CRAWL_SOURCE
+  RESEARCH_COMPANY
+  EXTRACT_SIGNALS
+  RESOLVE_ENTITY
+  UPDATE_CRM
+  KNOWLEDGE_INGESTION
+  KNOWLEDGE_PROCESSING
+  MARKET_ANALYSIS
+}
+
+enum RunStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+/// A place the engine looks. Carries its own health so one bad source can be
+/// paused without touching the rest of the pipeline.
+model Source {
+  id          String @id @default(cuid())
+  workspaceId String
+
+  /// Provider adapter key, e.g. "manual-csv", "sitemap", "rss".
+  provider String
+  name     String
+  /// Entry point. Null for providers that take input rather than fetch it.
+  url      String?
+
+  status  SourceStatus @default(ACTIVE)
+  enabled Boolean      @default(true)
+
+  /// Politeness controls, per source.
+  requestsPerMinute Int @default(20)
+  maxConcurrency    Int @default(2)
+  /// Do not re-fetch a page seen within this many minutes.
+  freshnessMinutes  Int @default(1440)
+
+  lastRunAt   DateTime?
+  lastErrorAt DateTime?
+  lastError   String?
+  nextRunAt   DateTime?
+
+  successCount Int @default(0)
+  failureCount Int @default(0)
+  blockedCount Int @default(0)
+
+  config Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace    Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  observations Observation[]
+  fetchLogs    FetchLog[]
+
+  discoveredContacts DiscoveredContact[]
+
+  @@unique([workspaceId, provider, name])
+  @@index([workspaceId])
+  @@index([workspaceId, status])
+  @@index([workspaceId, enabled, nextRunAt])
+}
+
+/// One HTTP interaction. Gives the Source Health dashboard real numbers
+/// instead of estimates, and records BLOCKED without retrying it.
+model FetchLog {
+  id          String @id @default(cuid())
+  workspaceId String
+  sourceId    String?
+
+  url        String
+  outcome    FetchOutcome
+  statusCode Int?
+  durationMs Int?
+  bytes      Int?
+  error      String?
+
+  fetchedAt DateTime @default(now())
+
+  source Source? @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, fetchedAt])
+  @@index([sourceId, fetchedAt])
+  @@index([workspaceId, outcome])
+}
+
+/// The canonical business. Holds the current best value of each fact; the
+/// justification for every one of them lives in Observation.
+model Company {
+  id          String @id @default(cuid())
+  workspaceId String
+
+  name String
+
+  /// Canonical keys used for entity resolution. Never displayed.
+  canonicalName   String
+  canonicalDomain String?
+
+  website String?
+  email   String?
+  phone   String?
+
+  country  String?
+  region   String?
+  city     String?
+  language String?
+  timezone String?
+  currency String?
+
+  industry    String?
+  companySize String?
+  description String?
+
+  linkedinUrl  String?
+  instagramUrl String?
+  facebookUrl  String?
+  youtubeUrl   String?
+
+  /// Research bookkeeping, so the engine can skip fresh records.
+  firstSeenAt    DateTime  @default(now())
+  lastSeenAt     DateTime  @default(now())
+  lastResearchAt DateTime?
+
+  resolutionState ResolutionState @default(RESOLVED)
+
+  /// Manual curation only. Discovery never sets these.
+  archivedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// Aggregate research state, derived from ResearchRun rows. Denormalised so
+  /// the companies list can be filtered without a join per row.
+  researchStatus ResearchStatus @default(NEVER)
+
+  workspace     Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  observations  Observation[]
+  signals       Signal[]
+  opportunities Opportunity[]
+  leads         Lead[]
+
+  researchRuns       ResearchRun[]
+  discoveredContacts DiscoveredContact[]
+
+  /// A domain identifies exactly one business within a workspace. This is the
+  /// database-level guarantee behind deduplication.
+  @@unique([workspaceId, canonicalDomain])
+  @@index([workspaceId])
+  @@index([workspaceId, canonicalName])
+  @@index([workspaceId, archivedAt])
+  @@index([workspaceId, lastResearchAt])
+  @@index([workspaceId, resolutionState])
+  @@index([workspaceId, researchStatus])
+}
+
+/// Append-only record of a single observed fact.
+///
+/// Never updated except to stamp supersededAt, and never deleted by the
+/// engine. This table is why an automated write can be explained and undone.
+model Observation {
+  id          String @id @default(cuid())
+  workspaceId String
+  companyId   String
+  sourceId    String?
+
+  /// Dotted path of the Company field this describes, e.g. "website".
+  field String
+  /// Observed value, stringified. Null records a definitive "looked, absent".
+  value String?
+
+  method     ExtractionMethod
+  confidence Int
+
+  sourceUrl String?
+  evidence  String?
+  locator   String?
+
+  observedAt DateTime  @default(now())
+  /// Set when a later observation replaced this one. The row survives.
+  supersededAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  source    Source?   @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId])
+  @@index([companyId, field, observedAt])
+  @@index([companyId, field, supersededAt])
+  @@index([workspaceId, observedAt])
+}
+
+/// Something noteworthy detected about a company.
+model Signal {
+  id          String @id @default(cuid())
+  workspaceId String
+  companyId   String
+
+  type       SignalType
+  status     SignalStatus @default(ACTIVE)
+  confidence Int
+
+  summary   String
+  evidence  String?
+  sourceUrl String?
+
+  firstSeenAt DateTime  @default(now())
+  lastSeenAt  DateTime  @default(now())
+  resolvedAt  DateTime?
+
+  metadata Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace     Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  company       Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  opportunities Opportunity[]
+
+  /// Re-detecting a signal refreshes lastSeenAt instead of duplicating it.
+  @@unique([companyId, type])
+  @@index([workspaceId])
+  @@index([workspaceId, type])
+  @@index([workspaceId, status])
+  @@index([companyId, status])
+}
+
+/// A service we could sell, derived from one or more signals.
+model Opportunity {
+  id          String @id @default(cuid())
+  workspaceId String
+  companyId   String
+
+  /// Key from the service taxonomy (src/lib/taxonomy/services.ts).
+  serviceKey String
+  status     OpportunityStatus @default(OPEN)
+
+  /// Deterministic 0-100, explained by `rationale`.
+  score     Int     @default(0)
+  rationale Json?
+
+  summary String?
+
+  /// The concrete next step this opportunity implies, e.g. "Offer a website
+  /// rebuild". Generated from the mapping rule, never free-form AI text.
+  recommendedAction String?
+
+  /// When the mapping first concluded this opportunity exists. Distinct from
+  /// firstSeenAt on the underlying signals.
+  detectedAt DateTime @default(now())
+
+  firstSeenAt DateTime  @default(now())
+  lastSeenAt  DateTime  @default(now())
+  dismissedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  signals   Signal[]
+
+  /// One opportunity per service per company; re-detection updates it.
+  @@unique([companyId, serviceKey])
+  @@index([workspaceId])
+  @@index([workspaceId, status])
+  @@index([workspaceId, serviceKey])
+  @@index([workspaceId, score])
+}
+
+/// One execution of the discovery pipeline. Metrics are counted, never
+/// estimated, so the statistics dashboard cannot show invented numbers.
+model DiscoveryRun {
+  id          String @id @default(cuid())
+  workspaceId String
+
+  status      RunStatus @default(RUNNING)
+  trigger     String    @default("SCHEDULED")
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  pagesAttempted  Int @default(0)
+  pagesSucceeded  Int @default(0)
+  pagesFailed     Int @default(0)
+  pagesBlocked    Int @default(0)
+
+  companiesDiscovered Int @default(0)
+  companiesMatched    Int @default(0)
+  duplicatesPrevented Int @default(0)
+
+  signalsDiscovered       Int @default(0)
+  opportunitiesDiscovered Int @default(0)
+  contactsDiscovered      Int @default(0)
+
+  leadsCreated Int @default(0)
+  leadsUpdated Int @default(0)
+
+  error String?
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  jobs      Job[]
+
+  @@index([workspaceId, startedAt])
+  @@index([workspaceId, status])
+}
+
+/// Unit of work for the worker. Postgres-backed queue: a worker claims a job
+/// by setting lockedBy/lockedUntil, so several workers can run safely and a
+/// crashed worker's lease simply expires.
+model Job {
+  id          String @id @default(cuid())
+  workspaceId String
+
+  type   JobType
+  status JobStatus @default(PENDING)
+
+  /// Lower runs first.
+  priority  Int      @default(100)
+  runAfter  DateTime @default(now())
+
+  attempts    Int @default(0)
+  maxAttempts Int @default(3)
+
+  /// Deduplicates queued work: the same key cannot be enqueued twice while
+  /// still pending.
+  idempotencyKey String?
+
+  payload Json?
+  result  Json?
+  error   String?
+
+  lockedBy    String?
+  lockedUntil DateTime?
+
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  discoveryRunId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace    Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  discoveryRun DiscoveryRun? @relation(fields: [discoveryRunId], references: [id], onDelete: SetNull)
+
+  @@unique([workspaceId, idempotencyKey])
+  @@index([status, runAfter, priority])
+  @@index([workspaceId, status])
+  @@index([workspaceId, type, status])
+  @@index([lockedUntil])
+}
+
+// ===========================================================================
+// RESEARCH, DECISION MAKERS, KNOWLEDGE, MARKET INTELLIGENCE (P5)
+//
+// All additive. Existing CRM and discovery tables are untouched except for
+// two new optional columns on Opportunity and one on Company.
+// ===========================================================================
+
+/// How completely a company (or one aspect of it) has been researched.
+enum ResearchStatus {
+  NEVER
+  PARTIAL
+  RESEARCHED
+  STALE
+  BLOCKED
+  NEEDS_REVIEW
+}
+
+/// The distinct aspects the research engine investigates. Splitting research
+/// per aspect lets freshness windows differ: contact details go stale slowly,
+/// advertising activity quickly.
+enum ResearchAspect {
+  WEBSITE
+  COMPANY_INFO
+  GEOGRAPHY
+  INDUSTRY
+  MARKETING
+  ADVERTISING
+  CONTENT
+  HIRING
+  TECHNOLOGY
+  DECISION_MAKERS
+  PUBLIC_CONTACTS
+  SERVICE_OPPORTUNITIES
+}
+
+/// One research pass over one aspect of one company.
+///
+/// Append-only history: a re-research inserts a new row rather than mutating
+/// the last, so "what did we know, and when" stays answerable.
+model ResearchRun {
+  id          String @id @default(cuid())
+  workspaceId String
+  companyId   String
+
+  aspect ResearchAspect
+  status ResearchStatus
+
+  /// Counted, never estimated.
+  factsFound   Int @default(0)
+  factsChanged Int @default(0)
+
+  sourceUrl String?
+  error     String?
+
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  /// When this result should be considered stale. Null means "no expiry".
+  freshUntil DateTime?
+
+  createdAt DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([companyId, aspect, startedAt])
+  @@index([workspaceId, status])
+  @@index([companyId, aspect, freshUntil])
+}
+
+/// How strongly a discovered person is evidenced.
+enum ContactVerification {
+  /// Name only, or inferred from prose. Never promoted.
+  UNVERIFIED
+  /// Name plus a role, from a published page.
+  NAME_AND_ROLE
+  /// Name plus a working public contact method.
+  CONTACTABLE
+  /// Published by the company itself in structured data.
+  PUBLISHED
+}
+
+/// A person found by discovery, held OUTSIDE the CRM until verified.
+///
+/// This staging table exists so unverified guesses can never appear in the
+/// user's real Contact list. Promotion into Contact is an explicit, tested
+/// step with a verification floor.
+model DiscoveredContact {
+  id          String  @id @default(cuid())
+  workspaceId String
+  companyId   String
+  sourceId    String?
+
+  fullName      String
+  canonicalName String
+
+  jobTitle String?
+  email    String?
+  phone    String?
+
+  linkedinUrl String?
+
+  /// Set by deterministic role matching, not by guesswork.
+  isDecisionMaker Boolean @default(false)
+
+  verification ContactVerification @default(UNVERIFIED)
+  confidence   Int
+
+  method    ExtractionMethod
+  sourceUrl String?
+  evidence  String?
+
+  firstSeenAt DateTime @default(now())
+  lastSeenAt  DateTime @default(now())
+
+  /// Set once this person has been copied into the CRM Contact table.
+  promotedContactId String?
+  promotedAt        DateTime?
+
+  /// Manual curation only.
+  dismissedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  source    Source?   @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+
+  /// Re-seeing the same person updates them instead of duplicating.
+  @@unique([companyId, canonicalName])
+  @@index([workspaceId])
+  @@index([workspaceId, verification])
+  @@index([companyId, isDecisionMaker])
+  @@index([workspaceId, promotedAt])
+}
+
+/// Where a piece of knowledge came from.
+enum KnowledgeSourceType {
+  ARTICLE
+  BLOG
+  DOCUMENTATION
+  RESEARCH
+  NEWS
+  VIDEO
+  PODCAST
+  REPOSITORY
+  TUTORIAL
+  COMMUNITY
+  INDUSTRY_RESOURCE
+  OTHER
+}
+
+/// A publicly available resource worth remembering.
+///
+/// Deliberately stores METADATA, a short summary and attribution — never the
+/// wholesale text of a copyrighted work. `excerpt` is length-capped in code.
+model KnowledgeResource {
+  id          String @id @default(cuid())
+  workspaceId String
+
+  title String
+  url   String
+  /// Canonical form of `url`, used to deduplicate.
+  canonicalUrl String
+
+  sourceName String?
+  sourceType KnowledgeSourceType @default(OTHER)
+  author     String?
+
+  publishedAt  DateTime?
+  discoveredAt DateTime  @default(now())
+
+  /// Our own short summary. Not a reproduction of the source.
+  summary String?
+  /// A brief attributed quotation, hard-capped in application code.
+  excerpt String?
+
+  language String?
+
+  /// Named entities mentioned, for cross-referencing with companies.
+  entities Json?
+  tags     Json?
+
+  /// Service taxonomy keys this resource is relevant to.
+  serviceRelevance Json?
+
+  /// Deterministic 0-100 usefulness score, explained by `rationale`.
+  relevanceScore Int   @default(0)
+  rationale      Json?
+
+  archivedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace Workspace                 @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  topics    KnowledgeResourceTopic[]
+
+  /// One record per URL per workspace.
+  @@unique([workspaceId, canonicalUrl])
+  @@index([workspaceId])
+  @@index([workspaceId, sourceType])
+  @@index([workspaceId, publishedAt])
+  @@index([workspaceId, relevanceScore])
+  @@index([workspaceId, archivedAt])
+}
+
+/// A subject heading resources can be filed under.
+model KnowledgeTopic {
+  id          String @id @default(cuid())
+  workspaceId String
+
+  name String
+  /// Normalised form used for matching.
+  slug String
+
+  description String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace Workspace                @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  resources KnowledgeResourceTopic[]
+
+  @@unique([workspaceId, slug])
+  @@index([workspaceId])
+}
+
+/// Explicit join table so the link can carry its own confidence.
+model KnowledgeResourceTopic {
+  resourceId String
+  topicId    String
+
+  /// How strongly this resource belongs to this topic, 0-100.
+  confidence Int @default(50)
+
+  createdAt DateTime @default(now())
+
+  resource KnowledgeResource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  topic    KnowledgeTopic    @relation(fields: [topicId], references: [id], onDelete: Cascade)
+
+  @@id([resourceId, topicId])
+  @@index([topicId])
 }

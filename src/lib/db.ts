@@ -1,18 +1,12 @@
+/**
+ * Database access for the Next.js application.
+ *
+ * The `server-only` import is the guard that stops a client component pulling
+ * the database client into the browser bundle. It is kept here, on the path
+ * the app uses, and deliberately not in db-client.ts, which the standalone
+ * worker process needs.
+ */
+
 import "server-only";
-import { PrismaClient } from "@prisma/client";
 
-const globalForPrisma = globalThis as unknown as {
-  prisma?: PrismaClient;
-};
-
-export const db =
-  globalForPrisma.prisma ??
-  new PrismaClient({
-    log: process.env.NODE_ENV === "development"
-      ? ["warn", "error"]
-      : ["error"],
-  });
-
-if (process.env.NODE_ENV !== "production") {
-  globalForPrisma.prisma = db;
-}
+export { db } from "./db-client";

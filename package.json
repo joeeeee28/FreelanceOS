@@ -1,0 +1,55 @@
+{
+  "name": "freelanceos",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Personal freelance business operating system \u2014 lead, contact, activity, task and follow-up management.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "prisma generate && next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "prisma:generate": "prisma generate",
+    "prisma:validate": "prisma validate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:parity": "node scripts/verify-migration-parity.mjs",
+    "test": "npm run test:generate && vitest run",
+    "test:watch": "vitest",
+    "test:generate": "node scripts/generate-test-client.mjs",
+    "worker": "tsx src/worker/index.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "6.19.3",
+    "@tanstack/react-query": "5.103.2",
+    "bcryptjs": "2.4.3",
+    "jose": "5.9.6",
+    "next": "15.5.25",
+    "next-themes": "0.4.6",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "server-only": "0.0.1",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3.3.7",
+    "@prisma/adapter-pg": "^6.19.3",
+    "@types/bcryptjs": "2.4.6",
+    "@types/node": "20.19.9",
+    "@types/pg": "^8.11.10",
+    "@types/react": "19.2.0",
+    "@types/react-dom": "19.2.0",
+    "autoprefixer": "10.4.21",
+    "eslint": "9.39.5",
+    "eslint-config-next": "15.5.25",
+    "pg": "^8.16.3",
+    "postcss": "8.5.28",
+    "prisma": "6.19.3",
+    "tailwindcss": "3.4.19",
+    "tsx": "^4.23.15",
+    "typescript": "5.9.3",
+    "vitest": "^3.2.7"
+  }
+}

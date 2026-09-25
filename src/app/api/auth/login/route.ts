@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { z } from "zod";
@@ -6,10 +7,12 @@ import { db } from "@/lib/db";
 import { isInitialized } from "@/lib/auth/bootstrap";
 import { normalizeEmail } from "@/lib/auth/normalize";
 import { verifyPassword } from "@/lib/password";
-import { randomOpaqueToken } from "@/lib/auth/session-tokens";
-import { signSessionToken } from "@/lib/auth/token";
-import { sessionCookie } from "@/lib/auth/server";
+import { issueSession } from "@/lib/auth/session";
+import { sessionCookie, sessionCookieOptions } from "@/lib/auth/server";
 import { rateLimiter } from "@/lib/security/rate-limiter";
+import { clientIpFromHeaders } from "@/lib/security/client-ip";
+
+export const dynamic = "force-dynamic";
 
 const inputSchema = z.object({
   email: z.string().email(),
@@ -24,86 +27,54 @@ export async function POST(request: Request) {
     );
   }
 
-  const ip =
-    request.headers
-      .get("x-forwarded-for")
-      ?.split(",")[0]
-      ?.trim() ?? "unknown";
+  const ip = clientIpFromHeaders(request.headers);
 
-  if (
-    !rateLimiter.consume(
-      `login:${ip}`,
-      20,
-      10 * 60_000,
-    ).ok
-  ) {
-    return NextResponse.json(
-      { error: "Too many requests." },
-      { status: 429 },
-    );
+  if (!rateLimiter.consume(`login:ip:${ip}`, 20, 10 * 60_000).ok) {
+    return NextResponse.json({ error: "Too many requests." }, { status: 429 });
   }
 
-  const input = inputSchema.safeParse(
-    await request.json().catch(() => null),
-  );
+  const input = inputSchema.safeParse(await request.json().catch(() => null));
 
   if (!input.success) {
-    return NextResponse.json(
-      { error: "Invalid credentials." },
-      { status: 401 },
-    );
+    return NextResponse.json({ error: "Invalid credentials." }, { status: 401 });
   }
 
-  const user = await db.user.findUnique({
-    where: {
-      email: normalizeEmail(input.data.email),
-    },
-  });
+  const email = normalizeEmail(input.data.email);
 
-  if (
-    !user ||
-    !(await verifyPassword(
-      input.data.password,
-      user.passwordHash,
-    ))
-  ) {
-    return NextResponse.json(
-      { error: "Invalid credentials." },
-      { status: 401 },
-    );
+  // Per-account throttling in addition to per-IP, so a distributed attacker
+  // cannot brute force one account by rotating source addresses.
+  if (!rateLimiter.consume(`login:email:${email}`, 10, 10 * 60_000).ok) {
+    return NextResponse.json({ error: "Too many requests." }, { status: 429 });
   }
 
-  const temporary = randomOpaqueToken();
+  const user = await db.user.findUnique({ where: { email } });
 
-  const session = await db.session.create({
-    data: {
-      userId: user.id,
-      token: temporary,
-      expiresAt: new Date(
-        Date.now() + 30 * 24 * 60 * 60 * 1000,
-      ),
-    },
-  });
+  // Always run a bcrypt comparison, even when the account does not exist, so
+  // response timing does not reveal whether an email is registered.
+  const passwordMatches = await verifyPassword(
+    input.data.password,
+    user?.passwordHash ?? DUMMY_PASSWORD_HASH,
+  );
 
-  const token = await signSessionToken({
-    sessionId: session.id,
+  if (!user || !passwordMatches) {
+    return NextResponse.json({ error: "Invalid credentials." }, { status: 401 });
+  }
+
+  const { rawToken } = await issueSession(db, {
     userId: user.id,
-  });
-
-  await db.session.update({
-    where: { id: session.id },
-    data: { token },
+    sessionId: randomUUID(),
   });
 
   const jar = await cookies();
-
-  jar.set(sessionCookie().name, token, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    path: "/",
-    maxAge: 30 * 24 * 60 * 60,
-  });
+  jar.set(sessionCookie().name, rawToken, sessionCookieOptions());
 
   return NextResponse.json({ ok: true });
 }
+
+/**
+ * A real bcrypt hash (cost 12) of a value no user can hold, used purely to
+ * equalise timing for unknown accounts. This is not a credential: nothing
+ * authenticates against it, because the `!user` check rejects first.
+ */
+const DUMMY_PASSWORD_HASH =
+  "$2a$12$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy";

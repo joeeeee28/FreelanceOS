@@ -1,66 +1,28 @@
-import { createLeadAction } from "./actions";
+import Link from "next/link";
 
-const fields = [
-  ["companyName", "Company *"],
-  ["contactName", "Contact"],
-  ["email", "Email"],
-  ["phone", "Phone"],
-  ["website", "Website"],
-  ["country", "Country"],
-  ["city", "City"],
-  ["industry", "Industry"],
-  ["companySize", "Company Size"],
-  ["linkedinUrl", "LinkedIn"],
-  ["instagramUrl", "Instagram"],
-  ["facebookUrl", "Facebook"],
-  ["serviceInterest", "Service Interest"],
-  ["source", "Source"],
-];
+import { Icon } from "@/components/ui/domain";
+import { PageHeader } from "@/components/ui/page";
+import { LeadForm } from "./lead-form";
 
 export default function NewLeadPage() {
   return (
-    <div className="max-w-3xl">
-      <h1 className="text-2xl font-semibold">
-        Add Lead
-      </h1>
-
-      <form
-        action={createLeadAction}
-        className="mt-6 space-y-5"
+    <div className="mx-auto max-w-3xl">
+      <Link
+        href="/leads"
+        className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
       >
-        <div className="grid gap-4 sm:grid-cols-2">
-          {fields.map(([name, label]) => (
-            <label
-              key={name}
-              className="space-y-1"
-            >
-              <span className="text-sm font-medium">
-                {label}
-              </span>
-              <input
-                name={name}
-                required={name === "companyName"}
-                className="w-full rounded-md border bg-background px-3 py-2"
-              />
-            </label>
-          ))}
-        </div>
+        <Icon name="chevronLeft" size={13} />
+        Back to leads
+      </Link>
 
-        <label className="block space-y-1">
-          <span className="text-sm font-medium">
-            Pain Point
-          </span>
-          <textarea
-            name="painPoint"
-            rows={5}
-            className="w-full rounded-md border bg-background px-3 py-2"
-          />
-        </label>
+      <div className="mt-4">
+        <PageHeader
+          title="Add a lead"
+          description="Record a real company you could earn revenue from. Anything you have not researched can be left blank and filled in later."
+        />
+      </div>
 
-        <button className="rounded-md bg-primary px-4 py-2 text-primary-foreground">
-          Create Lead
-        </button>
-      </form>
+      <LeadForm />
     </div>
   );
 }
