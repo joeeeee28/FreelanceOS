@@ -7,7 +7,8 @@ import { db } from "@/lib/db";
 import { hashPassword } from "@/lib/password";
 import { cleanText, normalizeEmail } from "@/lib/auth/normalize";
 import { passwordSchema } from "@/lib/auth/password-policy";
-import { issueSession } from "@/lib/auth/session";
+import { hashSessionToken } from "@/lib/auth/session-hash";
+import { signSessionToken } from "@/lib/auth/token";
 import { sessionCookie, sessionCookieOptions } from "@/lib/auth/server";
 import { CURRENCIES, normalizeCurrency } from "@/lib/money/currency";
 import { normalizeTimezone } from "@/lib/time/timezone";
@@ -101,46 +102,64 @@ export async function POST(request: Request) {
   const sessionId = randomUUID();
 
   try {
-    const { rawToken } = await db.$transaction(async (tx) => {
-      // Creating AppInit(id: 1) first makes the whole bootstrap race-safe: two
-      // concurrent setup requests contend on the primary key and the loser
-      // fails with P2002, rolling its transaction back entirely.
-      await tx.appInit.create({
-        data: { id: 1, initialized: true },
-      });
+    // Use a batch transaction instead of an interactive transaction.
+    //
+    // The setup flow previously used db.$transaction(async (tx) => ...).
+    // Every statement succeeded, but the interactive transaction failed while
+    // committing with Prisma P2028 in the Supabase runtime. All required IDs
+    // are generated up front so the dependent writes can remain atomic.
+    const workspaceId = randomUUID();
+    const userId = randomUUID();
+    const settingId = randomUUID();
 
-      const workspace = await tx.workspace.create({
+    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    const rawToken = await signSessionToken({
+      sessionId,
+      userId,
+    });
+
+    await db.$transaction([
+      db.appInit.create({
+        data: { id: 1, initialized: true },
+      }),
+      db.workspace.create({
         data: {
+          id: workspaceId,
           name: cleanText(input.workspaceName),
           defaultCurrency: input.defaultCurrency,
           country: cleanText(input.country),
           timezone: input.timezone,
         },
-      });
-
-      const user = await tx.user.create({
+      }),
+      db.user.create({
         data: {
-          workspaceId: workspace.id,
+          id: userId,
+          workspaceId,
           name: cleanText(input.name),
           email: normalizeEmail(input.email),
           passwordHash,
           role: "OWNER",
         },
-      });
-
-      await tx.setting.create({
-        data: { workspaceId: workspace.id },
-      });
-
-      const session = await issueSession(tx, { userId: user.id, sessionId });
-
-      await tx.appInit.update({
+      }),
+      db.setting.create({
+        data: {
+          id: settingId,
+          workspaceId,
+        },
+      }),
+      db.session.create({
+        data: {
+          id: sessionId,
+          userId,
+          tokenHash: hashSessionToken(rawToken),
+          expiresAt,
+        },
+      }),
+      db.appInit.update({
         where: { id: 1 },
-        data: { workspaceId: workspace.id },
-      });
-
-      return session;
-    });
+        data: { workspaceId },
+      }),
+    ]);
 
     const jar = await cookies();
     jar.set(sessionCookie().name, rawToken, sessionCookieOptions());

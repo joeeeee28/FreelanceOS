@@ -24,7 +24,7 @@ const clientOutput = path.join(outputDir, "client");
  * lookup during client generation (see the env note below).
  */
 function schemaEngineStub() {
-  return process.platform === "win32" ? "cmd" : "/bin/true";
+  return process.platform === "win32" ? "cmd" : "/usr/bin/true";
 }
 
 const original = readFileSync(source, "utf8");

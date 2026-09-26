@@ -138,11 +138,7 @@ async function toSummaries(
 ): Promise<RunSummary[]> {
   if (runs.length === 0) return [];
 
-  const grouped: Array<{
-    discoveryRunId: string | null;
-    status: string;
-    _count: { _all: number };
-  }> = await db.job.groupBy({
+  const grouped = await db.job.groupBy({
     by: ["discoveryRunId", "status"],
     where: { discoveryRunId: { in: runs.map((run) => run.id) } },
     _count: { _all: true },
