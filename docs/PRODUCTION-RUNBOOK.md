@@ -212,3 +212,41 @@ soft-deleted (`deletedAt`) and restorable through the UI.
 - [ ] Production scanning/scheduling remains disabled
 - [ ] No `.env` file and no secret values committed
 - [ ] Explicit approval recorded for deploying
+
+---
+
+## 9. P16.5 – P16.7 addendum: two services, one queue
+
+> Appended for the P16.5–P16.7 batch. Nothing above is superseded; the deploy
+> sequence in §1–§8 still applies, with the topology and gates below.
+
+**Topology.** `render.yaml` now defines the web service **and** a background
+worker. See `docs/P16-AUTOMATION-OPERATIONS.md` §7 for the exact build and start
+commands and the environment each service needs. Two rules are load-bearing:
+
+- migrations are applied only by the web build (`npx prisma migrate deploy`);
+  the worker generates its client and connects, and never migrates;
+- the web process never runs a job or a schedule. If no worker is running, the
+  queue does not move — the Automation page says "No worker reporting" rather
+  than pretending otherwise.
+
+**Infrastructure prerequisite.** Render runs background workers only on paid
+instance types. The worker service is declared at `plan: starter`; on a plan
+that cannot host it, the service will not be created and automation will not
+run. That is an infrastructure blocker, not an application defect.
+
+**Additional pre-deployment gates for this batch.**
+
+- [ ] `npm run prisma:parity` passes with both new migrations applied to a
+      disposable database
+- [ ] The worker service is created and shows a `WorkerHeartbeat` row on
+      `/automation` within one interval (30 s)
+- [ ] `/automation` reports the schedule and the queue from the database
+- [ ] One controlled discovery cycle is triggered manually, with global
+      scheduling still disabled
+- [ ] A worker restart mid-cycle leaves no job RUNNING past its lease
+
+**Staged activation.** Deploy the web service first (it applies the two additive
+migrations), verify health and login, then start the worker and confirm the
+heartbeat, then trigger one manual cycle and watch it settle. Do not enable
+scheduled discovery during the first production test.

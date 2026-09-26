@@ -1,3 +1,19 @@
+# Render blueprint: one web service and one background worker.
+#
+# The split is architectural, not cosmetic. The web process serves the UI,
+# owns the session and enqueues work; it never runs a crawl, never processes a
+# job and never schedules anything. The worker process owns scheduling, claims
+# jobs and runs the discovery pipeline, and it must stay alive to do so — a
+# queue that only moves when somebody loads a page is not automation.
+#
+# Migrations run in exactly one place: the web service's build. Two deployers
+# racing to migrate the same database is how a schema ends up half-applied, so
+# the worker does not migrate — it only generates its client and connects.
+#
+# Postgres is Supabase (external, configured under envVars below). The
+# application talks to it over the pooled connection; Prisma Migrate uses the
+# direct connection.
+
 services:
   - type: web
     name: freelanceos
@@ -12,9 +28,13 @@ services:
       - key: NODE_ENV
         value: production
 
+      # Supabase pooled connection (port 6543, pgbouncer) — used by the app at
+      # runtime. Set in the Render dashboard; never committed.
       - key: DATABASE_URL
         sync: false
 
+      # Supabase direct connection (port 5432) — used by `prisma migrate
+      # deploy`, which cannot run through the transaction pooler.
       - key: DIRECT_URL
         sync: false
 
@@ -23,3 +43,41 @@ services:
 
       - key: APP_URL
         sync: false
+
+      # Number of trusted proxies in front of the app, used to pick the client
+      # address out of X-Forwarded-For. Render terminates TLS at one proxy, so
+      # one is correct here; raise it only if another proxy is added.
+      - key: TRUSTED_PROXY_HOPS
+        value: "1"
+
+  # The background worker.
+  #
+  # NOTE ON PLANS: Render runs background workers only on paid instance types.
+  # `starter` is the smallest. On a plan that offers no background worker this
+  # service cannot be created, and nothing in the workspace will run on a
+  # schedule — the web service does not fall back to running jobs, by design.
+  - type: worker
+    name: freelanceos-worker
+    env: node
+    plan: starter
+    autoDeploy: true
+    # No migrations here: the web service owns them. The worker needs the
+    # generated client and nothing else.
+    buildCommand: npm install --include=dev && npx prisma generate
+    startCommand: npm run worker
+
+    envVars:
+      - key: NODE_ENV
+        value: production
+
+      - key: DATABASE_URL
+        sync: false
+
+      - key: DIRECT_URL
+        sync: false
+
+      # Stable identity for this worker's heartbeat row and structured logs.
+      # Two worker instances must not share it: override this if the service is
+      # ever scaled past one instance.
+      - key: WORKER_ID
+        value: freelanceos-worker

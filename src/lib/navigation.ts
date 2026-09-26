@@ -64,6 +64,7 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     label: "System",
     items: [
+      { label: "Automation", href: "/automation", icon: "automation", status: "live" },
       { label: "Settings", href: "/settings", icon: "settings", status: "planned" },
     ],
   },

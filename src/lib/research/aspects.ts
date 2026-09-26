@@ -39,6 +39,28 @@ export type ResearchedAspect =
   | "PUBLIC_CONTACTS"
   | "MARKETING";
 
+/**
+ * The aspects this build registers a researcher for.
+ *
+ * The single source of truth for coverage. `createWebsiteResearchers` builds
+ * its registry by iterating this list, so the list and the registry cannot
+ * disagree, and the aggregate research status can tell "not researched yet"
+ * apart from "not implementable by this build".
+ *
+ * The remaining aspects of the Prisma enum — hiring boards, ad libraries,
+ * technology fingerprinting, decision makers, industry, service opportunities
+ * and content — have no researcher here. They are not stubbed with an empty
+ * implementation: an aspect with nothing behind it stays "never researched"
+ * rather than being marked done.
+ */
+export const SUPPORTED_ASPECTS = [
+  "WEBSITE",
+  "COMPANY_INFO",
+  "GEOGRAPHY",
+  "PUBLIC_CONTACTS",
+  "MARKETING",
+] as const satisfies readonly ResearchedAspect[];
+
 /** Which fields each aspect is allowed to report. */
 const ASPECT_FIELDS: Readonly<Record<ResearchedAspect, readonly ObservableField[]>> = {
   // The site itself, and what language it publishes in.
@@ -240,11 +262,11 @@ export function createWebsiteResearchers(
 ): Partial<Record<ResearchedAspect, AspectResearcher>> {
   const now = options.now ?? (() => new Date());
 
-  return {
-    WEBSITE: researcherFor("WEBSITE", now),
-    COMPANY_INFO: researcherFor("COMPANY_INFO", now),
-    GEOGRAPHY: researcherFor("GEOGRAPHY", now),
-    PUBLIC_CONTACTS: researcherFor("PUBLIC_CONTACTS", now),
-    MARKETING: researcherFor("MARKETING", now),
-  };
+  const researchers: Partial<Record<ResearchedAspect, AspectResearcher>> = {};
+
+  for (const aspect of SUPPORTED_ASPECTS) {
+    researchers[aspect] = researcherFor(aspect, now);
+  }
+
+  return researchers;
 }

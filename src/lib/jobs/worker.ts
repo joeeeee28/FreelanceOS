@@ -21,10 +21,12 @@ import { JOB_HANDLERS } from "./handlers";
 import {
   claimNextJob,
   completeJob,
+  expireAbandonedJobs,
   failJob,
   heartbeatJob,
   DEFAULT_LEASE_MS,
 } from "./queue";
+import { JobTimeoutError, runWithDeadline } from "./execution";
 
 export interface WorkerOptions {
   /** Identifies this worker in the lock column. Defaults to a random id. */
@@ -38,6 +40,17 @@ export interface WorkerOptions {
   maxJobs?: number;
   /** Stop when this fires. */
   signal?: AbortSignal;
+  /**
+   * How long one job may run before it is abandoned and failed.
+   *
+   * A handler that respects its abort signal stops early; one that does not is
+   * left running, and the ownership guard rejects whatever it tries to write
+   * afterwards. Either way the job reaches a terminal state, so no lease can
+   * hold a job RUNNING indefinitely.
+   */
+  jobTimeoutMs?: number;
+  /** How often an idle worker writes off abandoned final attempts. */
+  reapIntervalMs?: number;
   /** Injected for tests. */
   sleep?: (ms: number) => Promise<void>;
   now?: () => Date;
@@ -46,17 +59,38 @@ export interface WorkerOptions {
 
 export type WorkerEvent =
   | { kind: "CLAIMED"; jobId: string; type: JobType }
-  | { kind: "COMPLETED"; jobId: string; type: JobType; summary: string }
-  | { kind: "FAILED"; jobId: string; type: JobType; error: string; willRetry: boolean }
+  | { kind: "COMPLETED"; jobId: string; type: JobType; summary: string; durationMs: number }
+  | {
+      kind: "FAILED";
+      jobId: string;
+      type: JobType;
+      error: string;
+      willRetry: boolean;
+      durationMs: number;
+    }
+  /** A write was refused because this worker no longer owns the job. */
+  | { kind: "LOST_LEASE"; jobId: string; type: JobType; operation: string }
+  /** Abandoned final attempts written off. */
+  | { kind: "REAPED"; jobIds: string[] }
   | { kind: "IDLE" };
 
 export interface WorkerStats {
   claimed: number;
   completed: number;
   failed: number;
+  /** Jobs this worker stopped being the owner of mid-flight. */
+  lostLease: number;
+  /** Abandoned jobs written off while this worker ran. */
+  reaped: number;
 }
 
 export const DEFAULT_IDLE_DELAY_MS = 2_000;
+
+/** Ten minutes is generous for a crawl or a research pass, and still bounded. */
+export const DEFAULT_JOB_TIMEOUT_MS = 10 * 60 * 1000;
+
+/** Reaping is a sweep, not a hot path. */
+export const DEFAULT_REAP_INTERVAL_MS = 60_000;
 
 const defaultSleep = (ms: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -75,11 +109,35 @@ export async function runWorker(options: WorkerOptions = {}): Promise<WorkerStat
   const sleep = options.sleep ?? defaultSleep;
   const now = options.now ?? (() => new Date());
 
-  const stats: WorkerStats = { claimed: 0, completed: 0, failed: 0 };
+  const jobTimeoutMs = options.jobTimeoutMs ?? DEFAULT_JOB_TIMEOUT_MS;
+  const reapIntervalMs = options.reapIntervalMs ?? DEFAULT_REAP_INTERVAL_MS;
+
+  const stats: WorkerStats = { claimed: 0, completed: 0, failed: 0, lostLease: 0, reaped: 0 };
+
+  let lastReapAt = 0;
+
+  /** Writes off final attempts whose worker died. Never throws. */
+  const reap = async (): Promise<void> => {
+    const started = now().getTime();
+    if (started - lastReapAt < reapIntervalMs) return;
+    lastReapAt = started;
+
+    try {
+      const expired = await expireAbandonedJobs({ now: now() });
+      if (expired.length === 0) return;
+
+      stats.reaped += expired.length;
+      options.onEvent?.({ kind: "REAPED", jobIds: expired.map((row) => row.id) });
+    } catch {
+      // Housekeeping only. The next tick tries again.
+    }
+  };
 
   while (true) {
     if (options.signal?.aborted === true) break;
     if (options.maxJobs !== undefined && stats.claimed >= options.maxJobs) break;
+
+    await reap();
 
     let job;
     try {
@@ -106,10 +164,14 @@ export async function runWorker(options: WorkerOptions = {}): Promise<WorkerStat
     stats.claimed += 1;
     options.onEvent?.({ kind: "CLAIMED", jobId: job.id, type: job.type });
 
-    // Renew the lease while the handler works, so a long job is not stolen
-    // by another worker mid-flight.
+    const startedAt = now().getTime();
+    const ownership = job.ownership;
+
+    // Renew the lease while the handler works, so a long job is not stolen by
+    // another worker mid-flight. Issued against this claim only: if the lease
+    // was lost and the job reclaimed, this worker can no longer extend it.
     const heartbeat = setInterval(() => {
-      void heartbeatJob(job.id, workerId, leaseMs).catch(() => {
+      void heartbeatJob(job.id, ownership, leaseMs).catch(() => {
         // A failed heartbeat means the lease is gone. The handler keeps
         // running; idempotency is what makes a double-run safe.
       });
@@ -117,54 +179,135 @@ export async function runWorker(options: WorkerOptions = {}): Promise<WorkerStat
 
     try {
       const handler = JOB_HANDLERS[job.type];
-      const result = await handler({
-        workspaceId: job.workspaceId,
-        jobId: job.id,
-        payload: job.payload,
-        discoveryRunId: job.discoveryRunId,
-        signal: options.signal,
-      });
+
+      const outcome = await runWithDeadline(
+        (signal) =>
+          handler({
+            workspaceId: job.workspaceId,
+            jobId: job.id,
+            payload: job.payload,
+            discoveryRunId: job.discoveryRunId,
+            signal,
+          }),
+        {
+          timeoutMs: jobTimeoutMs,
+          ...(options.signal === undefined ? {} : { signal: options.signal }),
+        },
+      );
+
+      const durationMs = now().getTime() - startedAt;
+
+      if (outcome.kind === "TIMED_OUT") {
+        // The handler may still be running and cannot be stopped from here.
+        // The job is failed now, and anything that handler later tries to
+        // write is refused by the ownership check, so a timed-out attempt can
+        // never overwrite the result of the retry that follows it.
+        await failJob(job.id, new JobTimeoutError(jobTimeoutMs), {
+          ownership,
+          category: "TIMEOUT",
+        });
+
+        stats.failed += 1;
+        options.onEvent?.({
+          kind: "FAILED",
+          jobId: job.id,
+          type: job.type,
+          error: `Timed out after ${jobTimeoutMs}ms`,
+          willRetry: true,
+          durationMs,
+        });
+        continue;
+      }
+
+      const result = outcome.value;
 
       if (result.ok) {
-        await completeJob(job.id, {
-          summary: result.summary,
-          enqueued: result.enqueued ?? 0,
-          // The job's own record of what it produced. DiscoveryRun counters
-          // are aggregated from these, which is why they are stored on the
-          // job rather than incremented onto the run as work happens.
-          ...(result.counters === undefined
-            ? {}
-            : { counters: serialiseRunCounters(result.counters) }),
-        });
+        const completed = await completeJob(
+          job.id,
+          {
+            summary: result.summary,
+            enqueued: result.enqueued ?? 0,
+            // The job's own record of what it produced. DiscoveryRun counters
+            // are aggregated from these, which is why they are stored on the
+            // job rather than incremented onto the run as work happens.
+            ...(result.counters === undefined
+              ? {}
+              : { counters: serialiseRunCounters(result.counters) }),
+          },
+          new Date(),
+          ownership,
+        );
+
+        if (completed === null) {
+          // Another worker owned this job by the time the handler finished.
+          // Its outcome stands; this worker's is discarded.
+          stats.lostLease += 1;
+          options.onEvent?.({
+            kind: "LOST_LEASE",
+            jobId: job.id,
+            type: job.type,
+            operation: "complete",
+          });
+          continue;
+        }
+
         stats.completed += 1;
         options.onEvent?.({
           kind: "COMPLETED",
           jobId: job.id,
           type: job.type,
           summary: result.summary,
+          durationMs,
         });
       } else {
-        const outcome = await failJob(job.id, result.summary);
+        const outcome2 = await failJob(job.id, result.summary, { ownership });
+
+        if (outcome2 === null) {
+          stats.lostLease += 1;
+          options.onEvent?.({
+            kind: "LOST_LEASE",
+            jobId: job.id,
+            type: job.type,
+            operation: "fail",
+          });
+          continue;
+        }
+
         stats.failed += 1;
         options.onEvent?.({
           kind: "FAILED",
           jobId: job.id,
           type: job.type,
           error: result.summary,
-          willRetry: outcome?.status === "PENDING",
+          willRetry: outcome2.status === "PENDING",
+          durationMs,
         });
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      const durationMs = now().getTime() - startedAt;
 
       try {
-        const outcome = await failJob(job.id, message);
+        const outcome = await failJob(job.id, message, { ownership });
+
+        if (outcome === null) {
+          stats.lostLease += 1;
+          options.onEvent?.({
+            kind: "LOST_LEASE",
+            jobId: job.id,
+            type: job.type,
+            operation: "fail",
+          });
+          continue;
+        }
+
         options.onEvent?.({
           kind: "FAILED",
           jobId: job.id,
           type: job.type,
           error: message,
-          willRetry: outcome?.status === "PENDING",
+          willRetry: outcome.status === "PENDING",
+          durationMs,
         });
       } catch {
         // Recording the failure failed too. Nothing more can be done here;

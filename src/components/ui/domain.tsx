@@ -276,7 +276,9 @@ export type IconName =
   | "sparkle"
   | "building"
   | "archive"
-  | "lock";
+  | "lock"
+  | "automation"
+  | "refresh";
 
 const PATHS: Record<IconName, ReactNode> = {
   dashboard: (
@@ -285,6 +287,20 @@ const PATHS: Record<IconName, ReactNode> = {
       <rect x="10.5" y="2.5" width="5" height="5" rx="1.2" />
       <rect x="2.5" y="10.5" width="5" height="5" rx="1.2" />
       <rect x="10.5" y="10.5" width="5" height="5" rx="1.2" />
+    </>
+  ),
+  // A gear with a small dial: the engine that runs on its own.
+  automation: (
+    <>
+      <circle cx="9" cy="9" r="2.6" />
+      <path d="M9 1.6v2.1M9 14.3v2.1M1.6 9h2.1M14.3 9h2.1M3.8 3.8l1.5 1.5M12.7 12.7l1.5 1.5M14.2 3.8l-1.5 1.5M5.3 12.7l-1.5 1.5" />
+    </>
+  ),
+  refresh: (
+    <>
+      <path d="M15.2 8.2a6.4 6.4 0 0 1-11 3.5" />
+      <path d="M2.8 9.8a6.4 6.4 0 0 1 11-3.5" />
+      <path d="M13.8 2.6v3.7h-3.7M4.2 15.4v-3.7h3.7" />
     </>
   ),
   leads: (

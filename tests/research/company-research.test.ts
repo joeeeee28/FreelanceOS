@@ -266,11 +266,14 @@ describe("a valid first-party website", () => {
     expect(stored.email).toBe("hello@brightdental.test");
     expect(stored.lastResearchAt).toEqual(NOW);
 
-    // Every aspect this build implements is RESEARCHED (asserted above). The
-    // company aggregate still reads STALE, because it also counts the aspects
-    // no researcher covers yet (hiring, technology, industry, …) as
-    // outstanding. That is the pre-existing pessimistic rule, unchanged here.
-    expect(stored.researchStatus).toBe("STALE");
+    // Every aspect this build implements is RESEARCHED (asserted above), so the
+    // company aggregate is RESEARCHED too. It is measured against the five
+    // aspects that have a researcher, not against all twelve in the enum: the
+    // seven with no researcher would otherwise keep every company permanently
+    // STALE, which reports an expiry that can never be resolved. A company that
+    // holds a fact this build cannot refresh — a hiring record, say — is not
+    // RESEARCHED (see the declared-coverage cases in freshness.test.ts).
+    expect(stored.researchStatus).toBe("RESEARCHED");
 
     const runs = await db.researchRun.findMany({ where: { companyId: company.id } });
     expect(runs).toHaveLength(5);

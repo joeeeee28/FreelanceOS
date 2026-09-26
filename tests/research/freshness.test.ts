@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { SUPPORTED_ASPECTS } from "@/lib/research/aspects";
 import {
   aggregateStatus,
   ASPECT_PRIORITY,
@@ -8,6 +9,7 @@ import {
   FRESHNESS_HOURS,
   freshUntilFor,
   planResearch,
+  researchCoverage,
   type AspectState,
 } from "@/lib/research/freshness";
 import {
@@ -215,6 +217,68 @@ describe("aggregateStatus", () => {
     );
 
     expect(aggregateStatus(states, NOW)).toBe("STALE");
+  });
+});
+
+/**
+ * The declared-coverage form, used by the research runner.
+ *
+ * Twelve aspects exist in the schema; five have a researcher in this build. The
+ * aggregate has to be able to tell "not checked yet" from "cannot be checked
+ * here", or every company is permanently STALE for aspects nothing will ever
+ * look at — an expiration that never stops being true.
+ */
+describe("aggregateStatus with declared coverage", () => {
+  const supported = SUPPORTED_ASPECTS;
+  const freshSupported = () => supported.map((aspect) => state({ aspect }));
+
+  it("covers five of the twelve aspects", () => {
+    expect(supported).toHaveLength(5);
+    expect(ASPECT_PRIORITY).toHaveLength(12);
+  });
+
+  it("does not report a company as stale because of aspects no researcher covers", () => {
+    const status = aggregateStatus(freshSupported(), NOW, { supported });
+
+    expect(status).not.toBe("STALE");
+    expect(status).toBe("RESEARCHED");
+  });
+
+  it("is still stale when a supported aspect expires", () => {
+    const states = freshSupported();
+    states[0] = state({ aspect: "WEBSITE", status: "RESEARCHED", freshUntil: hoursAgo(1) });
+
+    expect(aggregateStatus(states, NOW, { supported })).toBe("STALE");
+  });
+
+  it("is partial while some supported aspects have never been looked at", () => {
+    const states = supported.slice(0, 3).map((aspect) => state({ aspect }));
+
+    expect(aggregateStatus(states, NOW, { supported })).toBe("PARTIAL");
+  });
+
+  it("does not claim full research while it holds a fact this build cannot refresh", () => {
+    // HIRING has no researcher here, so a hiring record could never be brought
+    // up to date again. Holding one means the company is not fully researched.
+    const states = [...freshSupported(), state({ aspect: "HIRING" })];
+
+    expect(aggregateStatus(states, NOW, { supported })).toBe("PARTIAL");
+  });
+
+  it("keeps blocked distinct from unresearched", () => {
+    const states = supported.map((aspect) =>
+      state({ aspect, status: "BLOCKED", completedAt: hoursAgo(1) }),
+    );
+
+    expect(aggregateStatus(states, NOW, { supported })).toBe("BLOCKED");
+  });
+
+  it("states its coverage rather than implying all twelve were checked", () => {
+    const coverage = researchCoverage(supported);
+
+    expect(coverage.surface).toBe("5 of 12 aspects");
+    expect(coverage.unsupported).toContain("HIRING");
+    expect(coverage.unsupported).not.toContain("WEBSITE");
   });
 });
 

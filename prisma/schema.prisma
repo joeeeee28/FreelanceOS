@@ -772,6 +772,26 @@ model DiscoveryRun {
 /// Unit of work for the worker. Postgres-backed queue: a worker claims a job
 /// by setting lockedBy/lockedUntil, so several workers can run safely and a
 /// crashed worker's lease simply expires.
+/// Liveness of a running worker process.
+///
+/// One row per worker id, refreshed as the worker runs. Deliberately not
+/// workspace-scoped: a worker is shared infrastructure that serves every
+/// workspace, so it is not tenant data. It exists because the Job table alone
+/// cannot answer "is the worker alive?" — an idle worker holds no lease and
+/// would be indistinguishable from one that has crashed.
+model WorkerHeartbeat {
+  workerId String @id
+
+  startedAt  DateTime
+  lastSeenAt DateTime
+
+  /// Bounded, non-sensitive context: build version and hostname. Never
+  /// credentials, connection strings or tokens.
+  metadata Json?
+
+  @@index([lastSeenAt])
+}
+
 model Job {
   id          String @id @default(cuid())
   workspaceId String
@@ -813,6 +833,8 @@ model Job {
   @@index([workspaceId, status])
   @@index([workspaceId, type, status])
   @@index([lockedUntil])
+  /// Every job of one run, which is how the operations views read a cycle.
+  @@index([discoveryRunId])
 }
 
 // ===========================================================================

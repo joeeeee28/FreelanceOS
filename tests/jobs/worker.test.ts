@@ -98,6 +98,39 @@ describe("runWorker", () => {
     expect(stats.claimed).toBe(0);
   });
 
+  it("finishes the job it holds and stops, when asked to shut down", async () => {
+    await enqueueJob({ workspaceId: alice.workspaceId, type: "MARKET_ANALYSIS" });
+    await enqueueJob({ workspaceId: alice.workspaceId, type: "MARKET_ANALYSIS" });
+
+    const controller = new AbortController();
+
+    // This is what SIGTERM does to the loop: the in-flight job runs to
+    // completion and is recorded, and nothing new is claimed afterwards.
+    const stats = await runWorker({
+      sleep: noSleep,
+      signal: controller.signal,
+      onEvent: (event) => {
+        if (event.kind === "COMPLETED") controller.abort();
+      },
+    });
+
+    expect(stats.claimed).toBe(1);
+    expect(stats.completed).toBe(1);
+
+    const finished = await db.job.count({
+      where: { workspaceId: alice.workspaceId, status: "SUCCEEDED" },
+    });
+    expect(finished).toBe(1);
+
+    const remaining = await db.job.findFirstOrThrow({
+      where: { workspaceId: alice.workspaceId, status: "PENDING" },
+    });
+    // Untouched: not claimed, not leased, not failed.
+    expect(remaining.attempts).toBe(0);
+    expect(remaining.lockedBy).toBeNull();
+    expect(remaining.lockedUntil).toBeNull();
+  });
+
   describe("failure handling", () => {
     it("fails a job whose payload is unusable, and retries it", async () => {
       // CRAWL_SOURCE with no sourceId cannot proceed.

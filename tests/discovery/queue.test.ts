@@ -338,6 +338,30 @@ describe("manual controls", () => {
     expect(await cancelJob(claimed!.id)).toBe(false);
   });
 
+  it("refuses to cancel a job belonging to another workspace", async () => {
+    const job = await enqueueJob({ workspaceId: bob.workspaceId, type: "CRAWL_SOURCE" });
+
+    expect(await cancelJob(job.id, { workspaceId: alice.workspaceId })).toBe(false);
+
+    const stored = await db.job.findUniqueOrThrow({ where: { id: job.id } });
+    expect(stored.status).toBe("PENDING");
+  });
+
+  it("refuses to requeue a job belonging to another workspace", async () => {
+    await enqueueJob({
+      workspaceId: bob.workspaceId,
+      type: "CRAWL_SOURCE",
+      maxAttempts: 1,
+    });
+    const claimed = await claimNextJob("worker-1");
+    await failJob(claimed!.id, new Error("boom"));
+
+    expect(await retryJob(claimed!.id, { workspaceId: alice.workspaceId })).toBe(false);
+
+    const stored = await db.job.findUniqueOrThrow({ where: { id: claimed!.id } });
+    expect(stored.status).toBe("FAILED");
+  });
+
   it("requeues a failed job with a clean attempt counter", async () => {
     await enqueueJob({
       workspaceId: alice.workspaceId,

@@ -25,6 +25,7 @@ import {
   planResearch,
   type AspectState,
 } from "./freshness";
+import { SUPPORTED_ASPECTS } from "./aspects";
 import { hasPageEvidence, mergePageSignals } from "./page-signals";
 
 /** What an aspect researcher returns. */
@@ -252,7 +253,10 @@ export async function researchCompany(
   await client.company.update({
     where: { id: companyId },
     data: {
-      researchStatus: aggregateStatus(updated, now),
+      // Measured against the aspects this build implements, so a company whose
+      // site, contacts, location and profiles are current reads RESEARCHED
+      // rather than being permanently STALE for aspects no researcher covers.
+      researchStatus: aggregateStatus(updated, now, { supported: SUPPORTED_ASPECTS }),
       lastResearchAt: results.length > 0 ? now : company.lastResearchAt,
     },
   });
@@ -337,5 +341,5 @@ export async function selectCompaniesForResearch(options: {
     take: options.limit ?? 25,
   });
 
-  return companies.map((company) => company.id);
+  return (companies as Array<{ id: string }>).map((company) => company.id);
 }

@@ -20,6 +20,7 @@
 
 import { CachingFetcher } from "@/lib/discovery/crawl/cache";
 import { RetryingFetcher } from "@/lib/discovery/crawl/retry";
+import { LoggingFetcher } from "@/lib/discovery/fetch-log";
 import { DEFAULT_MIN_INTERVAL_MS, HttpFetcher } from "@/lib/discovery/fetcher";
 import type { FetchedDocument, Fetcher } from "@/lib/discovery/provider";
 import { serialiseRunCounters, type RunCounters } from "@/lib/discovery/run-counters";
@@ -166,9 +167,20 @@ export async function runCompanyResearch(
     };
   }
 
+  // The transport is wrapped in a fetch log for the same reason the crawl
+  // pipeline wraps its own: when a listed website cannot be read, "we asked and
+  // this is what came back" is evidence, and it is stored against the company's
+  // URL with no source id — the research pass is not driven by a source and
+  // must not attribute its requests to one. The wrapper sits outside the
+  // transport, exactly as in the pipeline, so an injected fetcher is logged the
+  // same way the real one is.
   const counting = new CountingFetcher(
-    options.fetcher ??
-      new RetryingFetcher(new HttpFetcher({ minIntervalMs: DEFAULT_MIN_INTERVAL_MS })),
+    new LoggingFetcher(
+      options.fetcher ??
+        new RetryingFetcher(new HttpFetcher({ minIntervalMs: DEFAULT_MIN_INTERVAL_MS })),
+      workspaceId,
+      null,
+    ),
   );
 
   // One cache for the whole pass: five aspects asking for the same homepage

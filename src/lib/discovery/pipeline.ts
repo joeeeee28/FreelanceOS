@@ -9,11 +9,12 @@
  * the guard.
  */
 
-import type { FetchOutcome as PrismaFetchOutcome, Prisma } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 
 import { db } from "@/lib/db-client";
 
 import { CachingFetcher } from "./crawl/cache";
+import { LoggingFetcher } from "./fetch-log";
 import { RetryingFetcher } from "./crawl/retry";
 import { HttpFetcher } from "./fetcher";
 import { ingestDiscoveredEntity, type IngestResult } from "./ingest";
@@ -21,7 +22,6 @@ import {
   validateEntity,
   type DiscoveryContext,
   type DiscoveryProvider,
-  type FetchedDocument,
   type Fetcher,
 } from "./provider";
 import { providerRegistry } from "./providers";
@@ -82,42 +82,6 @@ export interface RunSourceResult {
    */
   companyIds: string[];
   warnings: string[];
-}
-
-/** Wraps a fetcher so every request is recorded against the source. */
-class LoggingFetcher implements Fetcher {
-  constructor(
-    private readonly inner: Fetcher,
-    private readonly workspaceId: string,
-    private readonly sourceId: string,
-  ) {}
-
-  async fetch(
-    url: string,
-    init?: { timeoutMs?: number },
-  ): Promise<FetchedDocument> {
-    const document = await this.inner.fetch(url, init);
-
-    // Logging must never break a crawl, so a failed insert is swallowed.
-    try {
-      await db.fetchLog.create({
-        data: {
-          workspaceId: this.workspaceId,
-          sourceId: this.sourceId,
-          url: document.url.slice(0, 2000),
-          outcome: document.outcome as PrismaFetchOutcome,
-          statusCode: document.statusCode ?? null,
-          durationMs: document.durationMs ?? null,
-          bytes: document.body?.length ?? null,
-          error: document.error?.slice(0, 500) ?? null,
-        },
-      });
-    } catch {
-      // Intentionally ignored: observability must not break the pipeline.
-    }
-
-    return document;
-  }
 }
 
 /**

@@ -180,27 +180,82 @@ export function planResearch(
  * Summarises many aspect results into the company's overall status.
  *
  * The aggregate is the pessimistic one: a company is only RESEARCHED when
- * every aspect is. Reporting a half-researched company as done is how a user
- * ends up trusting a record that was never finished.
+ * every aspect *this build can research* is fresh and known. Reporting a
+ * half-researched company as done is how a user ends up trusting a record that
+ * was never finished.
+ *
+ * `supported` is what keeps that rule meaningful. Twelve aspects exist in the
+ * schema; this build implements five (see `SUPPORTED_ASPECTS`). Without the
+ * distinction, the seven aspects that can never have a researcher would keep
+ * every company permanently STALE — which is as wrong as calling it finished,
+ * because it reports an expiration that will never stop being true.
+ *
+ *   - NEVER          nothing this build can research has been looked at
+ *   - BLOCKED        every attempt to look was refused
+ *   - NEEDS_REVIEW   every attempt was unreadable (a site that was down)
+ *   - PARTIAL        something is known, something is not, or a result is partial
+ *   - STALE          everything researched is out of date
+ *   - RESEARCHED     everything this build can research is fresh
  */
 export function aggregateStatus(
   states: readonly AspectState[],
   now: Date = new Date(),
+  options: { supported?: readonly ResearchAspect[] } = {},
 ): ResearchStatus {
   if (states.length === 0) return "NEVER";
 
-  const known = states.filter((state) => state.status !== "NEVER");
+  // Defaults to the whole vocabulary so a caller that does not declare coverage
+  // gets exactly the old, maximally pessimistic answer. The research runner is
+  // the caller that declares it.
+  const considered = options.supported ?? ASPECT_PRIORITY;
+  const byAspect = new Map(states.map((state) => [state.aspect, state]));
+
+  const known = considered
+    .map((aspect) => byAspect.get(aspect))
+    .filter((state): state is AspectState => state !== undefined && state.status !== "NEVER");
+
+  // Nothing this build can investigate has ever been investigated.
   if (known.length === 0) return "NEVER";
 
-  if (states.every((state) => state.status === "BLOCKED")) return "BLOCKED";
-
-  const anyDue = ASPECT_PRIORITY.some((aspect) => {
-    const state = states.find((entry) => entry.aspect === aspect);
-    return decideAspect(state, aspect, now).due;
-  });
-
+  if (known.every((state) => state.status === "BLOCKED")) return "BLOCKED";
+  if (known.every((state) => state.status === "NEEDS_REVIEW")) return "NEEDS_REVIEW";
   if (known.some((state) => state.status === "PARTIAL")) return "PARTIAL";
-  if (anyDue) return known.length === states.length ? "STALE" : "PARTIAL";
 
-  return "RESEARCHED";
+  const anyDue = considered.some((aspect) => decideAspect(byAspect.get(aspect), aspect, now).due);
+
+  if (anyDue) return known.length === considered.length ? "STALE" : "PARTIAL";
+
+  // Everything that was investigated is fresh. RESEARCHED means exactly that:
+  // every aspect *this build can research* has been looked at and none has
+  // expired — it is not a claim about the aspects with no researcher, which is
+  // why `researchCoverage` exists alongside it. Two things still hold it back
+  // to PARTIAL: an aspect on the list that has never been looked at, and a
+  // stored fact for an aspect this build cannot refresh (a hiring record, say,
+  // could never be brought up to date again, so the company is not finished).
+  const uninvestigated =
+    known.length < considered.length ||
+    states.some((state) => !considered.includes(state.aspect) && state.status !== "NEVER");
+
+  return uninvestigated ? "PARTIAL" : "RESEARCHED";
+}
+
+/**
+ * What the aggregate status is measured against.
+ *
+ * Exposed so a surface can say "5 of 12 aspects" instead of implying that a
+ * RESEARCHED company has had all twelve investigated. Nothing in this build
+ * claims the other seven were checked.
+ */
+export function researchCoverage(supported: readonly ResearchAspect[]): {
+  supported: readonly ResearchAspect[];
+  unsupported: readonly ResearchAspect[];
+  surface: string;
+} {
+  const unsupported = ASPECT_PRIORITY.filter((aspect) => !supported.includes(aspect));
+
+  return {
+    supported,
+    unsupported,
+    surface: `${supported.length} of ${ASPECT_PRIORITY.length} aspects`,
+  };
 }

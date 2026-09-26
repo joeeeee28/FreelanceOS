@@ -82,8 +82,13 @@ const discoveryRun: JobHandler = async (context) => {
     orderBy: { createdAt: "asc" },
   });
 
+  // Anything other than an explicit manual request is scheduled work. The
+  // payload is read as a fixed enum rather than copied through, so a caller
+  // cannot choose an arbitrary value for a stored field.
+  const trigger = readString(context.payload, "trigger") === "MANUAL" ? "MANUAL" : "SCHEDULED";
+
   const run = await db.discoveryRun.create({
-    data: { workspaceId, status: "RUNNING", startedAt: now, trigger: "SCHEDULED" },
+    data: { workspaceId, status: "RUNNING", startedAt: now, trigger },
   });
 
   // Link the fan-out job to the run it created. `updateMany` rather than
