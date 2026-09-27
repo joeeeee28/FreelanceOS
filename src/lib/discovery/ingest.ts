@@ -141,6 +141,14 @@ export interface DiscoveredEntity {
   identity: EntityIdentity;
   facts: ObservedFact[];
   sourceId?: string | null;
+  /**
+   * Stable id of one public record, such as `osm:node:123`.
+   *
+   * A later sighting of the same key updates that company. It is not a name
+   * match and it is never taken from another workspace. Absent for every
+   * provider that does not have one.
+   */
+  recordKey?: string | null;
 }
 
 export interface IngestOptions {
@@ -163,7 +171,7 @@ export type IngestResult =
       kind: "INGESTED";
       companyId: string;
       created: boolean;
-      strategy: MatchStrategy | "NEW";
+      strategy: MatchStrategy | "NEW" | "RECORD_KEY";
       fields: FieldOutcome[];
       observationsWritten: number;
     }
@@ -176,6 +184,35 @@ export type IngestResult =
       observationsWritten: number;
     }
   | { kind: "SKIPPED"; reason: string };
+
+const RECORD_KEY = /^[a-z]{2,12}:[a-z]{2,12}:[0-9]{1,12}$/;
+
+/**
+ * The company that already holds this public-record key.
+ *
+ * Scoped to the workspace. A key from another tenant, an archived company, or
+ * a locator that is not a record key is ignored, so this cannot merge two
+ * businesses because their names look alike.
+ */
+async function companyForRecordKey(
+  tx: Prisma.TransactionClient,
+  workspaceId: string,
+  recordKey: string | null | undefined,
+): Promise<string | null> {
+  if (typeof recordKey !== "string" || !RECORD_KEY.test(recordKey)) return null;
+
+  const prior = await tx.observation.findFirst({
+    where: {
+      workspaceId,
+      locator: recordKey,
+      company: { workspaceId, archivedAt: null },
+    },
+    select: { companyId: true },
+    orderBy: { observedAt: "asc" },
+  });
+
+  return prior?.companyId ?? null;
+}
 
 /**
  * Ingests one discovered entity.
@@ -226,22 +263,27 @@ export async function ingestDiscoveredEntity(
       },
     });
 
-    const outcome = resolveEntity(entity.identity, candidates);
+    const recordedCompanyId = await companyForRecordKey(tx, workspaceId, entity.recordKey);
 
-    if (outcome.kind === "INSUFFICIENT_EVIDENCE") {
+    const outcome = recordedCompanyId === null ? resolveEntity(entity.identity, candidates) : null;
+
+    if (outcome?.kind === "INSUFFICIENT_EVIDENCE") {
       return { kind: "SKIPPED", reason: outcome.reason } as const;
     }
 
     let companyId: string;
     let created = false;
-    let strategy: MatchStrategy | "NEW";
+    let strategy: MatchStrategy | "NEW" | "RECORD_KEY";
     let review: { candidateIds: string[]; strategy: MatchStrategy; reason: string } | null =
       null;
 
-    if (outcome.kind === "MATCH" && isAutoMergeStrategy(outcome.strategy)) {
+    if (recordedCompanyId !== null) {
+      companyId = recordedCompanyId;
+      strategy = "RECORD_KEY";
+    } else if (outcome?.kind === "MATCH" && isAutoMergeStrategy(outcome.strategy)) {
       companyId = outcome.entityId;
       strategy = outcome.strategy;
-    } else {
+    } else if (outcome !== null) {
       // REVIEW and NEW both create a record. A review candidate is stored as
       // its own company flagged NEEDS_REVIEW rather than being merged on weak
       // evidence — a human resolves it later, and no data is lost either way.
@@ -274,6 +316,8 @@ export async function ingestDiscoveredEntity(
           reason: outcome.reason,
         };
       }
+    } else {
+      return { kind: "SKIPPED", reason: "No usable company name or domain" } as const;
     }
 
     const fieldOutcomes = await applyFacts({

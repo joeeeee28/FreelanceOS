@@ -10,6 +10,7 @@ import {
   publicMediaProvider,
   repositoryProvider,
 } from "./directory";
+import { placesProvider } from "./places";
 
 /**
  * The providers that ship with FreelanceOS.
@@ -45,8 +46,17 @@ export function createProviderRegistry(
   return registry;
 }
 
-/** The default registry for application code. */
-export const providerRegistry = createProviderRegistry();
+/**
+ * The registry the worker uses.
+ *
+ * `public-places` is registered here rather than in `BUILT_IN_PROVIDERS`
+ * because it refuses caller-supplied URLs. The built-in list is the set of
+ * providers that read whatever URL a source was configured with.
+ */
+export const providerRegistry = createProviderRegistry([
+  ...BUILT_IN_PROVIDERS,
+  placesProvider,
+]);
 
 export {
   websiteProvider,
@@ -57,4 +67,5 @@ export {
   repositoryProvider,
   publicMediaProvider,
   manualCsvProvider,
+  placesProvider,
 };

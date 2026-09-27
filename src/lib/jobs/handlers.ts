@@ -15,6 +15,7 @@ import type { JobType, Prisma } from "@prisma/client";
 
 import { db } from "@/lib/db-client";
 import { syncCompanyToLead } from "@/lib/discovery/crm-sync";
+import { appendSourceNotice } from "@/lib/discovery/places";
 import { runSource } from "@/lib/discovery/pipeline";
 import { providerRegistry } from "@/lib/discovery/providers";
 import { settleDiscoveryRun } from "@/lib/discovery/runs";
@@ -52,12 +53,18 @@ export interface HandlerResult {
 
 export type JobHandler = (context: HandlerContext) => Promise<HandlerResult>;
 
+function payloadRecord(payload: Prisma.JsonValue): Record<string, unknown> | null {
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return null;
+  return payload as Record<string, unknown>;
+}
+
 function readString(payload: Prisma.JsonValue, key: string): string | null {
-  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
-    return null;
-  }
-  const value = (payload as Record<string, unknown>)[key];
+  const value = payloadRecord(payload)?.[key];
   return typeof value === "string" && value !== "" ? value : null;
+}
+
+function readBoolean(payload: Prisma.JsonValue, key: string): boolean {
+  return payloadRecord(payload)?.[key] === true;
 }
 
 /**
@@ -76,8 +83,14 @@ const discoveryRun: JobHandler = async (context) => {
   const { workspaceId } = context;
   const now = context.now ?? new Date();
 
+  const scopedSourceId = readString(context.payload, "sourceId");
   const sources = await db.source.findMany({
-    where: { workspaceId, enabled: true, status: { not: "PAUSED" } },
+    where: {
+      workspaceId,
+      enabled: true,
+      status: { not: "PAUSED" },
+      ...(scopedSourceId === null ? {} : { id: scopedSourceId }),
+    },
     select: { id: true, name: true },
     orderBy: { createdAt: "asc" },
   });
@@ -106,7 +119,10 @@ const discoveryRun: JobHandler = async (context) => {
     await enqueueJob({
       workspaceId,
       type: "CRAWL_SOURCE",
-      payload: { sourceId: source.id },
+      payload: {
+        sourceId: source.id,
+        ...(scopedSourceId === null ? {} : { research: true }),
+      },
       discoveryRunId: run.id,
       // Scoped to the run, so tomorrow's cycle is not deduplicated against
       // today's while still collapsing double-queues within one cycle.
@@ -116,9 +132,11 @@ const discoveryRun: JobHandler = async (context) => {
     enqueued += 1;
   }
 
-  // Research is queued alongside crawling: refreshing what we already know is
-  // as valuable as finding something new.
-  const companies = await selectCompaniesForResearch({ workspaceId, limit: 25 });
+  // A scoped manual search researches the companies that crawl finds. It does
+  // not fan research out across the rest of the workspace. A scheduled cycle
+  // still refreshes companies we already know.
+  const companies =
+    scopedSourceId === null ? await selectCompaniesForResearch({ workspaceId, limit: 25 }) : [];
 
   for (const companyId of companies) {
     await enqueueJob({
@@ -130,6 +148,10 @@ const discoveryRun: JobHandler = async (context) => {
       priority: 150,
     });
     enqueued += 1;
+  }
+
+  if (scopedSourceId !== null && sources.length === 0) {
+    return { ok: false, summary: "Source not found" };
   }
 
   if (sources.length === 0 && companies.length === 0) {
@@ -193,13 +215,27 @@ const crawlSource: JobHandler = async (context) => {
       priority: 200,
     });
     enqueued += 1;
+
+    if (readBoolean(context.payload, "research")) {
+      await enqueueJob({
+        workspaceId: context.workspaceId,
+        type: "RESEARCH_COMPANY",
+        payload: { companyId },
+        discoveryRunId: context.discoveryRunId ?? undefined,
+        idempotencyKey: `research:${context.discoveryRunId ?? context.jobId}:${companyId}`,
+        priority: 180,
+      });
+      enqueued += 1;
+    }
   }
 
   return {
     ok: true,
-    summary:
+    summary: appendSourceNotice(
       `${result.entitiesValid} valid entities, ${result.companiesCreated} new, ` +
-      `${result.pagesBlocked} blocked.`,
+        `${result.pagesBlocked} blocked.`,
+      result.warnings,
+    ),
     enqueued,
     counters,
   };

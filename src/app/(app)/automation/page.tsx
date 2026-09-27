@@ -57,6 +57,9 @@ export default async function AutomationPage() {
 
         <div className="flex flex-wrap items-center justify-between gap-3">
           <RunDiscoveryNow />
+          <Link href="/find-clients#discover" className="text-xs underline">
+            Discover new businesses
+          </Link>
           <p className="text-xs text-subtle-foreground">
             Scheduling lives in the worker process. The web app never runs background
             work on a request.

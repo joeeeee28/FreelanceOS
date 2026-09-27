@@ -317,7 +317,9 @@ plus the full CRM workflow described above — leads, qualification, scoring,
 contacts, tasks, follow-ups, the interactive pipeline, activity timelines and
 the daily revenue engine, all wired to forms and covered by tests.
 
-Not implemented, and deliberately out of scope for now: external lead discovery
-(no scraping, no third-party lead APIs), AI enrichment or AI scoring, outreach
-automation, and anything involving money — proposals, invoices, payments and
-revenue reporting are absent from the data model.
+Public discovery can be started from Find Clients. It queues the existing
+worker, which reads OpenStreetMap for a supported place type and location.
+It does not use a paid lead database, and it does not invent a company when
+a source returns nothing. Outreach automation and anything involving money
+remain out of scope — proposals, invoices, payments and revenue reporting
+are absent from the data model.

@@ -16,7 +16,13 @@ import { FilterBar, FilterInput, FilterSelect } from "@/components/crm/filter-ba
 import { Pagination } from "@/components/crm/pagination";
 import { Icon, ScorePill } from "@/components/ui/domain";
 import { PageHeader } from "@/components/ui/page";
-import { Badge, EmptyState, LinkButton } from "@/components/ui/primitives";
+import { DiscoverBusinessesForm } from "@/components/crm/discover-businesses-form";
+import { Badge, Card, EmptyState, LinkButton } from "@/components/ui/primitives";
+import {
+  discoveryServiceOptions,
+  getPublicDiscoveryBoard,
+  PLACE_TYPES,
+} from "@/lib/discovery/places";
 
 const LEAD_OPTIONS = [
   "NONE",
@@ -71,6 +77,7 @@ export default async function FindClientsPage({
     failure === null && merged?.ok && typeof page === "number"
       ? await searchFindClients(workspaceId, merged.filters, page)
       : null;
+  const discovery = await getPublicDiscoveryBoard(workspaceId);
 
   const active = Boolean(
     params.q ||
@@ -104,6 +111,62 @@ export default async function FindClientsPage({
         title="Find Clients"
         description="Businesses already researched in this workspace, ranked by the stored opportunity score. Search becomes filters. Nothing here is invented."
       />
+
+      <Card className="mb-6 p-4">
+        <h2 className="text-sm font-semibold">Discover new businesses</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Queues a real discovery run. The worker reads OpenStreetMap for a supported place type.
+          A company is stored only when a public record names it. An empty result stays empty.
+        </p>
+        <DiscoverBusinessesForm
+          places={PLACE_TYPES.map((place) => ({ key: place.key, label: place.label }))}
+          services={discoveryServiceOptions()}
+        />
+        {discovery.status ? (
+          <p className="mt-3 text-xs text-muted-foreground">
+            Latest public discovery: {discovery.status.toLowerCase()}.
+            {discovery.runId ? (
+              <>
+                {" "}
+                <Link href={`/automation/runs/${discovery.runId}`} className="underline">
+                  Open run
+                </Link>
+              </>
+            ) : (
+              " Waiting for the worker."
+            )}
+            {discovery.message ? ` ${discovery.message}` : ""}
+          </p>
+        ) : null}
+        {discovery.companies.length > 0 ? (
+          <ul className="mt-3 space-y-2 text-sm">
+            {discovery.companies.map((company) => (
+              <li key={company.id} className="rounded-md border border-border px-3 py-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  {company.opportunityId && company.serviceKey ? (
+                    <Link href={`/find-clients/${company.id}?service=${company.serviceKey}`} className="font-medium hover:underline">
+                      {company.name}
+                    </Link>
+                  ) : (
+                    <span className="font-medium">{company.name}</span>
+                  )}
+                  <Badge>{company.researchStatus.toLowerCase()}</Badge>
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {[company.city, company.country].filter(Boolean).join(", ") || "Location not publicly verified"}
+                  {" · "}
+                  {company.website ?? "Website not publicly verified"}
+                  {" · "}
+                  {company.industry ?? "Industry not publicly verified"}
+                  {company.sourceUrl ? ` · ${company.sourceUrl}` : ""}
+                </p>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-3 text-xs text-muted-foreground">No public places are stored yet.</p>
+        )}
+      </Card>
 
       <FilterBar active={active} clearHref="/find-clients">
         <FilterInput
