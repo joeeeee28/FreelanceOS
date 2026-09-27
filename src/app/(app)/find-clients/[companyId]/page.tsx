@@ -3,6 +3,14 @@ import { notFound } from "next/navigation";
 
 import { requireUser } from "@/lib/auth/require-user";
 import {
+  DECISION_MAKER_INTERPRETATION_UNAVAILABLE,
+  contactLine,
+  interpretDecisionMakers,
+  listDecisionMakers,
+  personDisplayState,
+  personHistory,
+} from "@/lib/decision-makers";
+import {
   FIND_CLIENT_INTERPRETATION_UNAVAILABLE,
   getFindClientDetail,
   interpretFindClient,
@@ -13,7 +21,7 @@ import { Icon, ScorePill } from "@/components/ui/domain";
 import { PageHeader } from "@/components/ui/page";
 import { Badge, Card, LinkButton } from "@/components/ui/primitives";
 
-import { createLeadFromFindClientsForm } from "../actions";
+import { addPersonToCrmForm, createLeadFromFindClientsForm, reviewPublicPeopleForm } from "../actions";
 
 export default async function FindClientDetailPage({
   params,
@@ -31,7 +39,14 @@ export default async function FindClientDetailPage({
   const detail = await getFindClientDetail(workspaceId, companyId, service);
   if (detail === null) notFound();
 
-  const interpretation = await interpretFindClient(detail);
+  const people = await listDecisionMakers(workspaceId, detail.company.id);
+  const [interpretation, peopleInterpretation, histories] = await Promise.all([
+    interpretFindClient(detail),
+    people.length > 0 ? interpretDecisionMakers(people) : Promise.resolve(null),
+    Promise.all(people.map(async (person) => ({ id: person.id, rows: await personHistory(workspaceId, detail.company.id, person.id) }))),
+  ]);
+  const historyById = new Map(histories.map((entry) => [entry.id, entry.rows]));
+  const companyObservations = detail.observations.filter((item) => !item.label.startsWith("person."));
   const place = [detail.company.city, detail.company.region, detail.company.country]
     .filter(Boolean)
     .join(", ");
@@ -157,11 +172,11 @@ export default async function FindClientDetailPage({
 
       <Card className="p-4">
         <h2 className="text-sm font-semibold">Evidence</h2>
-        {detail.evidence.length === 0 && detail.observations.length === 0 ? (
+        {detail.evidence.length === 0 && companyObservations.length === 0 ? (
           <p className="mt-2 text-sm text-muted-foreground">No evidence is stored for this opportunity.</p>
         ) : (
           <ul className="mt-3 space-y-3">
-            {[...detail.evidence, ...detail.observations].map((item) => (
+            {[...detail.evidence, ...companyObservations].map((item) => (
               <li key={`${item.kind}:${item.id}`} className="rounded-md border border-border px-3 py-2 text-sm">
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge>{item.kind}</Badge>
@@ -180,6 +195,95 @@ export default async function FindClientDetailPage({
             ))}
           </ul>
         )}
+      </Card>
+
+      <Card className="p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-sm font-semibold">Decision makers</h2>
+          <form action={reviewPublicPeopleForm}>
+            <input type="hidden" name="companyId" value={detail.company.id} />
+            <button
+              type="submit"
+              className="inline-flex h-8 items-center rounded-md border border-border bg-surface px-2.5 text-xs font-medium"
+            >
+              Review public pages
+            </button>
+          </form>
+        </div>
+        <p className="mt-2 text-sm text-muted-foreground">
+          People published on this company&apos;s own pages. A likely role is not a verified fact. Nothing here is emailed.
+        </p>
+        {peopleInterpretation ? (
+          <p className="mt-2 text-sm">
+            {peopleInterpretation.message === DECISION_MAKER_INTERPRETATION_UNAVAILABLE
+              ? DECISION_MAKER_INTERPRETATION_UNAVAILABLE
+              : peopleInterpretation.message}
+            {peopleInterpretation.summary ? ` ${peopleInterpretation.summary}` : ""}
+          </p>
+        ) : (
+          <p className="mt-2 text-sm text-muted-foreground">No publicly evidenced people are stored.</p>
+        )}
+        <ul className="mt-4 space-y-4">
+          {people.map((person) => {
+            const state = personDisplayState(person);
+            const previousTitles = (historyById.get(person.id) ?? []).filter(
+              (row) => row.field === "person.jobTitle" && !row.current,
+            );
+            return (
+              <li key={person.id} className="rounded-md border border-border px-3 py-3 text-sm">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-medium">{person.fullName}</span>
+                  <Badge tone={state === "VERIFIED" ? "success" : state === "LIKELY" ? "warning" : "neutral"}>
+                    {state === "NO_CONTACT_DATA" ? "No contact data" : state.toLowerCase()}
+                  </Badge>
+                  {person.isDecisionMaker ? <Badge>Relevant role</Badge> : null}
+                </div>
+                <p className="mt-1">{person.jobTitle ?? "Title not publicly verified"}</p>
+                <dl className="mt-2 grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
+                  <div>Email: {contactLine(person.email)}</div>
+                  <div>Phone: {contactLine(person.phone)}</div>
+                  <div className="sm:col-span-2">LinkedIn: {contactLine(person.linkedinUrl)}</div>
+                  <div>Confidence: {person.confidence}</div>
+                  <div>Last seen: {relativeLabel(person.lastSeenAt)}</div>
+                  <div className="sm:col-span-2 break-all">Source: {person.sourceUrl ?? "No source URL"}</div>
+                </dl>
+                <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-muted-foreground">
+                  {person.roleReasons.map((reason) => (
+                    <li key={reason}>{reason}</li>
+                  ))}
+                  <li>{person.evidence ?? "No evidence quote is stored."}</li>
+                  {detail.opportunity.serviceLabel ? (
+                    <li>Stored company opportunity: {detail.opportunity.serviceLabel}.</li>
+                  ) : null}
+                </ul>
+                {previousTitles.length > 0 ? (
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Earlier title: {previousTitles.map((row) => row.value).filter(Boolean).join("; ")}
+                  </p>
+                ) : null}
+                <div className="mt-3">
+                  {person.promotedContactId && detail.lead ? (
+                    <LinkButton href={`/leads/${detail.lead.id}`} size="sm" variant="ghost">
+                      In CRM
+                    </LinkButton>
+                  ) : detail.lead ? (
+                    <form action={addPersonToCrmForm}>
+                      <input type="hidden" name="discoveredContactId" value={person.id} />
+                      <button
+                        type="submit"
+                        className="inline-flex h-8 items-center rounded-md bg-primary px-2.5 text-xs font-medium text-primary-foreground"
+                      >
+                        Add to CRM
+                      </button>
+                    </form>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">Create a lead before adding this person to the CRM.</p>
+                  )}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
       </Card>
 
       {detail.research.length > 0 ? (

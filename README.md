@@ -305,6 +305,11 @@ evidence and provenance. The interpreter does not write `Opportunity.summary`
 or `rationale`. Creating a lead uses the existing company-to-lead rules and
 does not overwrite a value a person already entered.
 
+Decision makers are people already published on a company's own pages.
+A name in prose, an email local-part, or an author byline is not stored.
+Reviewing public pages does not create a lead or a CRM contact. Add to CRM
+is a separate action, and it fills only blank fields on an existing lead.
+
 ## Project status
 
 Phases 1 and 2 are complete: bootstrap, authentication and workspace setup,
