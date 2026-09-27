@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { requireUser } from "@/lib/auth/require-user";
+import { getAiHealth } from "@/lib/ai/health";
 import { getAutomationOverview, getWorkerLiveness } from "@/lib/discovery/automation";
 import { SUPPORTED_ASPECTS } from "@/lib/research/aspects";
 import { researchCoverage } from "@/lib/research/freshness";
@@ -15,6 +16,7 @@ import {
   SourcesPanel,
   relative,
 } from "@/components/crm/automation-panels";
+import { AiStatusPanel } from "@/components/crm/ai-status-panel";
 import { RunDiscoveryNow } from "@/components/crm/automation-controls";
 
 export const dynamic = "force-dynamic";
@@ -34,12 +36,13 @@ export default async function AutomationPage() {
   const now = new Date();
   const { workspaceId, workspace } = await requireUser();
 
-  const [overview, worker] = await Promise.all([
+  const [overview, worker, ai] = await Promise.all([
     getAutomationOverview(workspaceId, {
       timezone: workspace.timezone || "UTC",
       now,
     }),
     getWorkerLiveness(now),
+    getAiHealth({ now }),
   ]);
 
   return (
@@ -84,6 +87,8 @@ export default async function AutomationPage() {
         <FailuresPanel failures={overview.recentFailures} now={now} />
 
         <SourcesPanel overview={overview} now={now} />
+
+        <AiStatusPanel health={ai} now={now} />
 
         <Card>
           <CardHeader

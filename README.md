@@ -23,6 +23,7 @@ unknown values stay `NULL` rather than being invented.
 | Styling   | Tailwind CSS 3                          |
 | Auth      | Session cookie + `jose` JWT + `bcryptjs`|
 | Validation| Zod 3                                   |
+| AI        | Optional local Ollama, off by default   |
 
 ### Project layout
 
@@ -39,6 +40,7 @@ src/
   lib/
     auth/                Sessions, bootstrap, password policy
     crm/                 Lead/contact/task/follow-up/dashboard services
+    ai/                  Optional local Ollama interpreter (off by default)
     security/            Rate limiting
     db.ts  env.ts        Prisma client, validated environment
 scripts/                 Maintenance / verification scripts
@@ -208,8 +210,9 @@ rather than silently ignored.
 ### Lead scoring
 
 `src/lib/crm/scoring.ts` is deterministic, explainable and bounded to 0–100.
-There is no AI and no randomness: the same lead always produces the same score,
-and every point awarded carries a reason code shown on the lead page.
+There is no AI and no randomness in scoring: the same lead always produces the
+same score, and every point awarded carries a reason code shown on the lead
+page. The optional local interpreter described below is not consulted.
 
 | Signal | Points |
 | --- | --- |
@@ -276,6 +279,31 @@ and pagination all run in SQL. Page size defaults to 25 and is hard-capped at
 100, so no request can pull an unbounded result set.
 
 ---
+
+### Optional local AI
+
+FreelanceOS can interpret evidence it already holds through a local Ollama
+server. This is off unless `AI_ENABLED=true`. There is no paid AI API and no
+mandatory external model. If Ollama is down, disabled, or misconfigured, the
+rest of the application keeps working and the interpreter returns an explicit
+unknown rather than invented text.
+
+The interpreter is not a source of truth. It does not create companies,
+contacts, opportunities, or scores. A claim is kept only when its value is
+present in the evidence the caller supplied; everything else is rejected.
+Health is a live probe: a saved endpoint and model are reported as configured,
+not healthy, until the server answers and the model is actually installed.
+`GET /api/health` does not consult Ollama. See `.env.example` for the optional
+variables.
+
+Find Clients answers which already-researched businesses to approach, and why.
+Natural language becomes a closed set of filters and is applied in the database
+before any model call. The list never calls the model. Opening one company may
+ask the local interpreter to explain stored evidence; if Ollama is off or down,
+the page shows "AI interpretation unavailable." and keeps the stored score,
+evidence and provenance. The interpreter does not write `Opportunity.summary`
+or `rationale`. Creating a lead uses the existing company-to-lead rules and
+does not overwrite a value a person already entered.
 
 ## Project status
 
